@@ -3061,6 +3061,14 @@
 
         function renderLocalMap(data) {
             if (!localMapCanvas) return;
+            // Reset zoom & pan whenever NEW location data arrives (different
+            // reference = fresh fetch from a location change), so the
+            // "seen from above" map re-centres on the new area instead of
+            // staying stuck at the previous location's zoom/pan offset.
+            // The resize handler reuses latestLocalMapData, so we skip reset.
+            if (data !== latestLocalMapData) {
+                resetLocalMapZoom();
+            }
             latestLocalMapData = data;
             latestLocalMapFrameTimes = localMapFrameTimes(data);
             const maxFrame = latestLocalMapFrameTimes ? Math.max(0, latestLocalMapFrameTimes.length - 1) : LOCALMAP_FRAME_MAX;
