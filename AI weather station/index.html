@@ -15,6 +15,7 @@
     <!-- build:localmap-nadir-20260906-1 — the bird's-eye radar is now a TRUE straight-down (nadir) view: square window, ONE shared metres-per-pixel scale on both axes via Web Mercator world units (basemap, satellite clouds, rain radar, weather grid and place labels all re-projected the same way), real-distance km range rings — and the ⏳ Next 3 hours time indication + arrival timeline now show the total precipitation expected to fall (0.1 mm up to 50 mm or more) -->
     <!-- build:localmap-carto-20260907-1 — FIXED the blank map: tile.openstreetmap.org turned out to answer failed loads with a blank 256×256 "blocked" placeholder (HTTP 200 + x-blocked header) that passed the size check and silently erased the map whenever OpenTopoMap was busy. The fallback is now CARTO Voyager street tiles (no blocking, CORS ok), every tile gets a 12 s timeout, and if all tile sources fail the map shows a visible "map tiles unreachable" note instead of an empty panel. -->
     <!-- build:localmap-nadir-fix-20260908-1 — FIXED the never-appearing map: the nadir projection measured its north–south span BACKWARDS (Web-Mercator world-Y grows southward), which made the shared px-per-world scale NEGATIVE → log2(negative) = NaN → the basemap tile loop silently ran ZERO iterations (so only the weather blobs showed, with the "map tiles unreachable" note). The span is now positive and every world-Y offset points the right way, so the straight-down terrain map finally draws, the weather field is no longer mirrored, and the km range rings return. -->
+    <!-- build:localmap-geocode-everywhere-20260908-1 — the update-location search now finds far more places (and tells you honestly when it can't): geocoding gained an OpenStreetMap Nominatim fallback plus smarter candidate ranking (real city first — no more "Den Haag, South Africa" surprises), and an unresolvable name returns a clear "Location not found — check the spelling or use lat, lon coordinates" note under the search box instead of silently leaving the globe + "seen from above" map stuck on the default location. -->
     <title>AI Weather Station</title>
     <meta name="author" content="Jerry van den Berg VYP">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
@@ -191,6 +192,16 @@
             grid-template-columns: 1fr auto;
             gap: 10px;
             margin-bottom: 16px;
+        }
+        .location-note {
+            margin: 6px 0 0;
+            font-size: 0.74rem;
+            line-height: 1.4;
+            color: #ffcf8f;
+            display: none;
+        }
+        .location-note.error {
+            display: block;
         }
         /* ===== 🔔 PWA install + weather alerts UI ===== */
         .pwa-bar {
@@ -1033,6 +1044,7 @@
             <input id="location-input" type="text" placeholder="Enter a city or location">
             <button type="button" id="manual-update">Update location</button>
         </div>
+        <div class="location-note" id="location-note" role="status" aria-live="polite"></div>
         <div class="localmap-panel" id="localmap-panel">
             <div class="localmap-head">
                 <div class="localmap-title">🛰️ Local weather · seen from above
@@ -1197,6 +1209,7 @@
         const updated = document.getElementById('updated');
         const manualBtn = document.getElementById('manual-update');
         const locationInput = document.getElementById('location-input');
+        const locationNoteEl = document.getElementById('location-note');
         const installBtn = document.getElementById('install-btn');
         const alertsBtn = document.getElementById('alerts-btn');
         const alertsStatusEl = document.getElementById('alerts-status');
@@ -3276,12 +3289,23 @@
         if (localMapZoomOutBtn) localMapZoomOutBtn.addEventListener('click', () => applyLocalMapZoom(1 / 1.3));
         if (localMapZoomResetBtn) localMapZoomResetBtn.addEventListener('click', resetLocalMapZoom);
 
-        async function fetchWeather(location, resetSelectedDay = false) {
+        async function fetchWeather(location, resetSelectedDay = false, reportLocationError = false) {
             try {
                 const timestamp = Date.now();
                 const query = location ? `?location=${encodeURIComponent(location)}&_=${timestamp}` : `?_=${timestamp}`;
                 const res = await fetch(`/weather${query}`);
-                if (!res.ok) throw new Error('Failed to fetch');
+                if (!res.ok) {
+                    // The API answers 404 with { error } when the typed location
+                    // could not be found — surface that message to the user.
+                    let message = 'Failed to fetch weather data.';
+                    try {
+                        const errorBody = await res.json();
+                        if (errorBody && typeof errorBody.error === 'string' && errorBody.error) {
+                            message = errorBody.error;
+                        }
+                    } catch { /* keep the generic message */ }
+                    throw new Error(message);
+                }
                 const data = await res.json();
 
                 // Show which weather provider actually served this response —
@@ -3376,6 +3400,13 @@
                 }
             } catch (e) {
                 weatherInfo.innerHTML = '<div style="color:#b42318;">Error loading weather data.</div>';
+                // Let location-not-found errors reach updateLocation() so the
+                // search box shows a clear message ("Location not found…").
+                // Only when the user asked for it — the 30-second auto-refresh
+                // must stay silent (the note is already visible on screen).
+                if (reportLocationError && e && typeof e.message === 'string' && /^Location not found/i.test(e.message)) {
+                    throw e;
+                }
             }
         }
 
@@ -3387,17 +3418,27 @@
                 manualBtn.textContent = 'Updating...';
             }
             try {
-                await fetchWeather(activeLocation, true);
+                await fetchWeather(activeLocation, true, true);
+                clearLocationNote();
             } catch (e) {
-                if (showLoading) {
-                    alert('Could not update weather for that location.');
-                }
+                const reason = e && typeof e.message === 'string' && e.message ? e.message : 'Could not update weather for that location.';
+                setLocationNote(`⚠️ ${reason} The globe and “seen from above” map keep showing the last good location.`);
             } finally {
                 if (showLoading) {
                     manualBtn.disabled = false;
                     manualBtn.textContent = 'Update location';
                 }
             }
+        }
+
+        // Inline feedback under the location search box (no blocking alert).
+        function setLocationNote(text) {
+            if (!locationNoteEl) return;
+            locationNoteEl.textContent = text;
+            locationNoteEl.className = 'location-note error';
+        }
+        function clearLocationNote() {
+            if (locationNoteEl) locationNoteEl.className = 'location-note';
         }
 
         // ===== Globe helpers: texture + math =====
