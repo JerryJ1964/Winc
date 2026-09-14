@@ -15,6 +15,9 @@
     <!-- build:localmap-nadir-20260906-1 — the bird's-eye radar is now a TRUE straight-down (nadir) view: square window, ONE shared metres-per-pixel scale on both axes via Web Mercator world units (basemap, satellite clouds, rain radar, weather grid and place labels all re-projected the same way), real-distance km range rings — and the ⏳ Next 3 hours time indication + arrival timeline now show the total precipitation expected to fall (0.1 mm up to 50 mm or more) -->
     <!-- build:localmap-carto-20260907-1 — FIXED the blank map: tile.openstreetmap.org turned out to answer failed loads with a blank 256×256 "blocked" placeholder (HTTP 200 + x-blocked header) that passed the size check and silently erased the map whenever OpenTopoMap was busy. The fallback is now CARTO Voyager street tiles (no blocking, CORS ok), every tile gets a 12 s timeout, and if all tile sources fail the map shows a visible "map tiles unreachable" note instead of an empty panel. -->
     <!-- build:localmap-nadir-fix-20260908-1 — FIXED the never-appearing map: the nadir projection measured its north–south span BACKWARDS (Web-Mercator world-Y grows southward), which made the shared px-per-world scale NEGATIVE → log2(negative) = NaN → the basemap tile loop silently ran ZERO iterations (so only the weather blobs showed, with the "map tiles unreachable" note). The span is now positive and every world-Y offset points the right way, so the straight-down terrain map finally draws, the weather field is no longer mirrored, and the km range rings return. -->
+    <!-- build:localmap-geocode-everywhere-20260908-1 — the update-location search now finds far more places (and tells you honestly when it can't): geocoding gained an OpenStreetMap Nominatim fallback plus smarter candidate ranking (real city first — no more "Den Haag, South Africa" surprises), and an unresolvable name returns a clear "Location not found — check the spelling or use lat, lon coordinates" note under the search box instead of silently leaving the globe + "seen from above" map stuck on the default location. -->
+    <!-- build:localmap-drizzle-20260909-1 — "just drizzling" now LOOKS like just drizzling on the 🛰️ seen-from-above map: a new faint 'drizzle' cell class (WMO drizzle codes 51–57, or any trace amount 0 < mm < 0.3) paints a small pale-blue haze blob with NO white shower rim and NO animated rain streaks, instead of the full vivid rain blob — so trace drizzle under a sunny sky no longer reads as a downpour. Real rain (codes 61–67 / 80–82, or ≥ 0.3 mm) is unchanged, and the 🌧️ RainViewer radar layer is untouched. The backend classifyLocalCell in api/weather.js returns the same 'drizzle' type (and now 'fog' too, matching the front end), so the live "now" frame and the +15 min…+3 h forecast frames agree. -->
+    <!-- build:localmap-nolabels-20260911-1 — no more baked-in black city/village names or white village dots on the 🛰️ seen-from-above map: the basemap is now CARTO Voyager NO-LABELS tiles only (both the terrain and street basemap buttons load voyager_nolabels), so OpenTopoMap's and labeled Voyager's painted-on place names and white spots are gone entirely. The app's OWN labels (drawLocalMapPlaceLabels — dark pills, light text, gold/ice-blue dots at the true geo position) stay and remain the only text on the map; tile cache keys, layer toggles and attribution (now © OpenStreetMap contributors · © CARTO) unchanged. -->
     <title>AI Weather Station</title>
     <meta name="author" content="Jerry van den Berg VYP">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
@@ -27,6 +30,38 @@
     <link rel="apple-touch-icon" href="/icons/icon-192.png">
     <link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192.png">
     <link rel="icon" type="image/png" sizes="512x512" href="/icons/icon-512.png">
+    <!-- build:localmap-vector-20260912-3 — killed the grey "Zoom Level Not Supported" pills: RainViewer radar/satellite tiles only exist to z10, so lmc-radar + lmc-sat sources AND layers now declare maxzoom 10 — deeper zooms upscale the real z10 tiles instead of fetching the CDN's grey placeholder image -->
+    <!-- build:feelslike-mapfix-20260913-1 — 🌡️ feels-like temperature (at 1.50 m) added everywhere: hero line under the current temp, a Feels-like stat card, per-forecast-day values, 15-minute nowcast slots and every 5×5 local-map cell (Open-Meteo apparent_temperature / WeatherAPI feelslike_c). Map view resilience: MapLibre now loads with a jsDelivr fallback if unpkg is unreachable, so the 🛰️ seen-from-above map can no longer vanish when one CDN is down. -->
+    <!-- build:tempgraph-2m-20260913-1 — 🌡️ Air-temperature bar graph (@ 2 m, the standard measurement height) added under the "Weather flowing with the wind" icon grid: one bar per 5×5 cell in the same lattice order, every bar carrying its cell's true weather icon, coloured by temperature, 🔥/❄️ marked extremes, frame-synced with the timeline (Now → +3 h) and a tooltip that compares 2 m measured vs 1.50 m feels-like. -->
+    <!-- build:tempgraph-icons-20260914-1 — the 🌡️ Air-temperature bar graph (and every 5×5 cell everywhere) now shows icons that MATCH the temperature: the coldest bar only wears ❄️ when the air is actually freezing (≤ 0 °C) and the hottest only 🔥 in real heat (≥ 30 °C) — milder extremes get neutral ▲/▼ arrows, so a 17 °C day can never again read as "gonna snow". Snowy weather codes at temperatures too warm for snow (> 2 °C — a known model quirk) are shown as 🌧️ Rain instead, in the bar graph, the flowing icon grid, the 🛰️ map blobs (live "now" via api/weather.js and the +15 min…+3 h forecast frames via localMapFrameCell alike). Wet snow at 0…2 °C keeps its ❄️. -->
+    <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css"
+    <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css"
+        onerror="this.onerror=null;this.href='https://cdn.jsdelivr.net/npm/maplibre-gl@4.7.1/dist/maplibre-gl.css';">
+    <script>
+        // MapLibre loader with a CDN fallback: unpkg first, jsDelivr second.
+        // A blocking single-tag <script src> meant that one unreachable CDN left
+        // the 🛰️ seen-from-above map blank forever ("failed to load" note).
+        // The async loader dispatches maplibreready / maplibrefailed events that
+        // the app listens for, so the map boots the instant the library lands.
+        (function () {
+            function inject(src, ok, fail) {
+                var tag = document.createElement('script');
+                tag.src = src;
+                tag.async = true;
+                tag.onload = ok;
+                tag.onerror = fail;
+                document.head.appendChild(tag);
+            }
+            function announce(name) { return function () { document.dispatchEvent(new Event(name)); }; }
+            inject('https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js',
+                announce('maplibreready'),
+                function () {
+                    inject('https://cdn.jsdelivr.net/npm/maplibre-gl@4.7.1/dist/maplibre-gl.js',
+                        announce('maplibreready'),
+                        announce('maplibrefailed'));
+                });
+        })();
+    </script>
     <style>
         :root {
             color-scheme: light;
@@ -149,6 +184,13 @@
             font-weight: 700;
             color: #0f3150;
         }
+        .feels-line {
+            font-size: 1.02rem;
+            font-weight: 600;
+            color: #2a6291;
+            margin-top: 2px;
+        }
+        .feels-line small { font-weight: 500; color: #5d89ad; font-size: 0.8rem; }
         .status-pill {
             padding: 8px 14px;
             background: rgba(121, 210, 255, 0.28);
@@ -191,6 +233,16 @@
             grid-template-columns: 1fr auto;
             gap: 10px;
             margin-bottom: 16px;
+        }
+        .location-note {
+            margin: 6px 0 0;
+            font-size: 0.74rem;
+            line-height: 1.4;
+            color: #ffcf8f;
+            display: none;
+        }
+        .location-note.error {
+            display: block;
         }
         /* ===== 🔔 PWA install + weather alerts UI ===== */
         .pwa-bar {
@@ -606,6 +658,57 @@
             padding: 0 16px;
         }
         .localmap-loading.hidden { display: none; }
+        /* ===== 🛰️ MapLibre GL map — the professional top-down radar ===== */
+        #localmap-map {
+            position: relative; width: 100%;
+            height: clamp(340px, 62vmin, 500px);
+            background: #060d1c;   /* deep space blue behind tiles while they load */
+            border-radius: 0;
+            font-family: 'Inter', system-ui, sans-serif;
+        }
+        #localmap-map .maplibregl-canvas { outline: none; border-radius: 0; }
+        #localmap-map .maplibregl-canvas-container { cursor: crosshair; }
+        /* live-data chip pinned to the map corner — the "broadcast" touch */
+        .localmap-live-chip {
+            position: absolute; top: 10px; left: 10px; z-index: 5;
+            display: inline-flex; align-items: center; gap: 6px;
+            padding: 4px 10px; border-radius: 999px;
+            background: rgba(6, 14, 30, 0.82);
+            border: 1px solid rgba(140, 200, 255, 0.35);
+            color: #cfe9ff; font-size: 0.7rem; font-weight: 800;
+            letter-spacing: 0.06em; text-transform: uppercase;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.45);
+            backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px);
+            pointer-events: none;
+        }
+        .localmap-live-chip .dot {
+            width: 8px; height: 8px; border-radius: 50%;
+            background: #3dff8a; box-shadow: 0 0 8px rgba(61, 255, 138, 0.9);
+            animation: lmc-pulse 2s ease-in-out infinite;
+        }
+        @keyframes lmc-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
+        /* (top-right forecast pill removed — top-left live chip is the only one) */
+        /* MapLibre controls, re-themed to match the dark radar chrome */
+        .localmap-stage .maplibregl-ctrl-group {
+            background: rgba(8, 18, 36, 0.9) !important;
+            border: 1px solid rgba(140, 200, 255, 0.3) !important;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.4) !important;
+        }
+        .localmap-stage .maplibregl-ctrl-scale {
+            background: rgba(8, 18, 36, 0.78) !important;
+            border-color: rgba(160, 200, 240, 0.55) !important;
+            color: #cfe4ff !important;
+            font-size: 10px !important; font-weight: 700;
+            border-radius: 4px; padding: 1px 6px !important;
+            text-shadow: 0 1px 2px rgba(0, 0, 0, 0.7);
+        }
+        .localmap-stage .maplibregl-ctrl-attrib {
+            background: rgba(6, 12, 26, 0.72) !important;
+            color: #9db8dc !important;
+            font-size: 10px !important;
+        }
+        .localmap-stage .maplibregl-ctrl-attrib a { color: #b9d4f5 !important; }
+        .localmap-stage .maplibregl-ctrl-attrib-button { filter: invert(0.85) hue-rotate(180deg); }
         /* (single "You are here" marker is drawn directly on the canvas in
            the local-map render function, below the center dot) */
         .localmap-cellinfo {
@@ -626,6 +729,142 @@
             color: #8fe0ff; font-weight: 800;
             font-variant-numeric: tabular-nums;
             text-shadow: 0 0 10px rgba(143, 224, 255, 0.35);
+        }
+        /* 🗺️ Weather icons carried by the wind (below the radar): every icon
+           keeps its REAL sky condition (sun ☀️, cloud ☁️, rain 🌧️, drizzle
+           🌦️, snow ❄️, hail 🧊, fog 🌫️) but drifts through its own cell
+           like weather flowing with the wind — each cell's live wind speed +
+           direction push the icon, and calm air leaves it floating gently. */
+        .localmap-icon-grid {
+            padding: 8px 14px 6px;
+            border-top: 1px dashed rgba(140, 200, 255, 0.22);
+            background: rgba(8, 26, 52, 0.55);
+        }
+        .localmap-icon-grid-head {
+            display: flex; align-items: baseline; justify-content: space-between;
+            gap: 8px; margin-bottom: 6px;
+        }
+        .localmap-icon-grid-title {
+            font-size: 0.7rem; font-weight: 700; color: #8fb2dd;
+            letter-spacing: 0.02em; text-transform: uppercase;
+        }
+        .localmap-icon-grid-cells {
+            position: relative;
+            height: 200px;
+            overflow: hidden;
+            border-radius: 12px;
+            /* soft sky backdrop + a faint 5×5 lattice so the flowing icons
+               still read as "one icon per cell" as they drift with the wind */
+            background-color: rgba(8, 20, 42, 0.62);
+            background-image:
+                radial-gradient(ellipse at 50% 40%, rgba(130, 185, 240, 0.12), transparent 62%),
+                linear-gradient(180deg, rgba(28, 58, 96, 0.28), rgba(6, 16, 38, 0)),
+                linear-gradient(90deg, rgba(120, 180, 240, 0.09) 1px, transparent 1px),
+                linear-gradient(0deg, rgba(120, 180, 240, 0.09) 1px, transparent 1px);
+            background-size: 100% 100%, 100% 100%, 20% 20%, 20% 20%;
+            box-shadow: inset 0 1px 4px rgba(0, 0, 0, 0.4);
+        }
+        .lmc-icon-grid-cell {
+            position: absolute;
+            display: flex; flex-direction: column; align-items: center; justify-content: center;
+            min-width: 30px; min-height: 40px;
+            padding: 1px 7px;
+            background: rgba(10, 26, 54, 0.72);
+            border: 1px solid rgba(140, 200, 255, 0.28);
+            border-radius: 999px;
+            text-align: center;
+            font-family: 'Inter', system-ui, sans-serif;
+            box-shadow: 0 3px 9px rgba(0, 0, 0, 0.5), inset 0 0 0 0.5px rgba(165, 210, 255, 0.16);
+            pointer-events: none;
+            will-change: transform, left, top;
+        }
+        .lmc-icon-grid-icon {
+            font-size: 1.15rem;
+            line-height: 1;
+            margin-bottom: 1px;
+            filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.55));
+        }
+        .lmc-icon-grid-temp {
+            font-size: 0.6rem; font-weight: 800; color: #ffd66b;
+            line-height: 1.1; margin-top: 1px;
+            text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
+        }
+        @media (max-width: 640px) {
+            .localmap-icon-grid-cells { height: 170px; }
+            .lmc-icon-grid-cell { min-width: 26px; min-height: 34px; }
+        }
+        /* ===== 🌡️ Air-temperature bar graph @ 2 m (under the flowing icons) =====
+           One bar per grid cell — same 5×5 lattice order as the map and the
+           flowing icons — each bar carrying its cell's true weather icon and
+           the measured 2 m temperature (the height above the headline 1.50 m
+           feels-like value on the chips). */
+        .localmap-tempgraph {
+            margin-top: 8px;
+            border-top: 1px dashed rgba(140, 200, 255, 0.16);
+            padding-top: 6px;
+        }
+        .localmap-tempgraph-head {
+            display: flex; align-items: baseline; justify-content: space-between;
+            gap: 8px; margin-bottom: 4px;
+        }
+        .localmap-tempgraph-title {
+            font-size: 0.7rem; font-weight: 700; color: #8fb2dd;
+            letter-spacing: 0.02em; text-transform: uppercase;
+        }
+        .localmap-tempgraph-bars {
+            display: flex; align-items: stretch;
+            gap: 3px;
+            height: 128px;
+            padding: 7px 5px 5px;
+            border-radius: 12px;
+            background-color: rgba(8, 20, 42, 0.62);
+            background-image:
+                radial-gradient(ellipse at 50% 0%, rgba(130, 185, 240, 0.10), transparent 62%),
+                linear-gradient(180deg, rgba(28, 58, 96, 0.22), rgba(6, 16, 38, 0));
+            box-shadow: inset 0 1px 4px rgba(0, 0, 0, 0.4);
+            overflow: hidden;
+        }
+        .lm-temp-col {
+            flex: 1 1 0;
+            min-width: 0;
+            display: flex; flex-direction: column; align-items: center; justify-content: flex-end;
+            border-radius: 7px;
+            padding: 1px 1px 0;
+            cursor: default;
+        }
+        .lm-temp-col:hover { background: rgba(140, 200, 255, 0.10); }
+        .lm-temp-icon {
+            font-size: 0.92rem;
+            line-height: 1;
+            margin-bottom: 2px;
+            filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.55));
+        }
+        .lm-temp-val {
+            font-size: 0.6rem; font-weight: 800; color: #ffd66b;
+            line-height: 1.1; margin-bottom: 3px;
+            text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
+            white-space: nowrap;
+        }
+        .lm-temp-track {
+            position: relative;
+            flex: 1 1 auto;
+            width: 100%;
+            min-height: 10px;
+            border-bottom: 1px solid rgba(140, 200, 255, 0.28);
+        }
+        .lm-temp-bar {
+            position: absolute;
+            left: 0; right: 0; bottom: 0;
+            border-radius: 4px 4px 0 0;
+            min-height: 3px;
+            box-shadow: inset 0 0 0 0.5px rgba(255, 255, 255, 0.16), 0 0 8px rgba(0, 0, 0, 0.25);
+        }
+        .lm-temp-col.hot .lm-temp-val { color: #ff9f6b; }
+        .lm-temp-col.cold .lm-temp-val { color: #9fdcff; }
+        @media (max-width: 640px) {
+            .localmap-tempgraph-bars { height: 104px; }
+            .lm-temp-icon { font-size: 0.8rem; }
+            .lm-temp-val { font-size: 0.55rem; }
         }
         .localmap-legend { display: flex; flex-wrap: wrap; gap: 6px; }
         .localmap-legend-chip {
@@ -716,16 +955,28 @@
         /* --- ⏱️ Arrival timeline: red streak from "now" to when precipitation reaches you --- */
         .localmap-timeline { padding: 6px 14px 10px; }
         .localmap-tl-caption {
+            display: flex; flex-direction: column; gap: 3px;
             font-size: 0.7rem; font-weight: 800; letter-spacing: 0.02em;
             color: #ff8d99; margin-bottom: 5px;
             text-shadow: 0 0 12px rgba(255, 77, 94, 0.35);
         }
+        .localmap-tl-summary { line-height: 1.35; }
+        /* 💧 Expected rainfall amount — its own line just below the caption
+           line that carries the ☁️ average-cloud figure, so the wet part of
+           the next-3-hours story is never buried in a wall of text. */
+        .localmap-tl-precip {
+            font-size: 0.72rem; font-weight: 800;
+            color: #ffd66b; text-shadow: none;
+        }
         .localmap-tl-caption.calm { color: #8fe0b0; text-shadow: none; }
+        .localmap-tl-caption.calm .localmap-tl-precip { color: #a8e6c1; }
         /* ☁️ Next-3-hours sky strip: one coloured segment per 15-min slot
-           (clear → clouds → rain/snow/hail) so you can SEE what is coming. */
+           (clear → clouds → rain/snow/hail). Each wet segment also carries the
+           expected amount (mm) right inside it, so you can SEE what is coming
+           without hovering; dry segments stay empty. */
         .localmap-tl-forecast {
             position: relative;
-            height: 15px;
+            height: 30px;
             margin-bottom: 6px;
             border-radius: 8px;
             overflow: hidden;
@@ -736,11 +987,17 @@
             gap: 2px;
             padding: 1px;
         }
-        .localmap-tl-forecast i { flex: 1 1 0; min-width: 0; border-radius: 4px; }
+        .localmap-tl-forecast i {
+            flex: 1 1 0; min-width: 0; border-radius: 4px;
+            display: flex; align-items: flex-end; justify-content: center;
+            font-size: 0.6rem; font-weight: 800; line-height: 1;
+            padding-bottom: 3px; letter-spacing: -0.01em;
+            overflow: hidden;
+        }
         .localmap-tl-forecast em {
-            position: absolute; top: 50%; left: 0;
-            transform: translate(-50%, -50%);
-            font-style: normal; font-size: 0.68rem; line-height: 1;
+            position: absolute; top: 5px; left: 0;
+            transform: translate(-50%, 0);
+            font-style: normal; font-size: 0.72rem; line-height: 1;
             text-shadow: 0 1px 3px rgba(0, 0, 0, 0.9);
             pointer-events: none;
         }
@@ -800,6 +1057,8 @@
             .localmap-cellinfo { min-height: 24px; }
             .localmap-timeline { padding: 4px 12px 8px; }
             .localmap-tl-caption { font-size: 0.66rem; }
+            .localmap-tl-forecast i { font-size: 0.52rem; padding-bottom: 2px; }
+            .localmap-tl-forecast em { top: 4px; font-size: 0.66rem; }
         }
         /* ===== 📱 Responsive: phone ↔ screen ===== */
         html {
@@ -1033,6 +1292,7 @@
             <input id="location-input" type="text" placeholder="Enter a city or location">
             <button type="button" id="manual-update">Update location</button>
         </div>
+        <div class="location-note" id="location-note" role="status" aria-live="polite"></div>
         <div class="localmap-panel" id="localmap-panel">
             <div class="localmap-head">
                 <div class="localmap-title">🛰️ Local weather · seen from above
@@ -1044,14 +1304,15 @@
                 </div>
             </div>
             <div class="localmap-stage">
-                <canvas id="localmap-canvas" role="img" aria-label="Top-down weather map: clouds, rain, snow and hail around your location"></canvas>
-                <div class="localmap-loading" id="localmap-loading">Setting up the radar view…</div>
+                <div id="localmap-map" role="img" aria-label="Top-down weather map: clouds, rain, snow and hail around your location"></div>
+                <div class="localmap-live-chip" id="localmap-live-chip"><span class="dot"></span><span id="localmap-live-text">Live</span></div>
+                <div class="localmap-loading" id="localmap-loading">Setting up the weather view…</div>
             </div>
             <div class="localmap-layers" id="localmap-layers" role="group" aria-label="Radar layers — show or hide map layers">
-                <button type="button" class="localmap-layer-btn on" data-layer="topo" title="Basemap: OpenTopoMap terrain (view from above). Tap to switch to the street map.">🗺️ Terrain</button>
-                <button type="button" class="localmap-layer-btn on" data-layer="clouds" title="Clouds — real satellite imagery + forecast cloud cover">☁️ Clouds</button>
+                <button type="button" class="localmap-layer-btn on" data-layer="topo" title="Basemap: colourful vector map (green parks, blue water — razor-sharp at any zoom, free). Tap for the dark night-radar style.">🎨 Colour</button>
+                <button type="button" class="localmap-layer-btn on" data-layer="clouds" title="Clouds — forecast cloud cover from the weather model">☁️ Clouds</button>
                 <button type="button" class="localmap-layer-btn on" data-layer="fog" title="Fog — low-lying haze hugging the ground (fog / mist / rime fog)">🌫️ Fog</button>
-                <button type="button" class="localmap-layer-btn on" data-layer="rain" title="Rain — live radar + forecast showers">🌧️ Rain</button>
+                <button type="button" class="localmap-layer-btn on" data-layer="rain" title="Rain — forecast showers from the weather model">🌧️ Rain</button>
                 <button type="button" class="localmap-layer-btn on" data-layer="snow" title="Snow — forecast snow showers">🌨️ Snow</button>
                 <button type="button" class="localmap-layer-btn on" data-layer="hail" title="Hail — forecast hail storms">🧊 Hail</button>
                 <button type="button" class="localmap-layer-btn on" data-layer="wind" title="Wind — arrows point where the wind blows, colour = Beaufort force">💨 Wind</button>
@@ -1067,7 +1328,10 @@
             </div>
             <div class="localmap-cellinfo" id="localmap-cellinfo"></div>
             <div class="localmap-timeline" id="localmap-timeline">
-                <div class="localmap-tl-caption" id="localmap-tl-caption">⏱️ Next 3 hours — the strip below shows the sky: clouds, rain, snow &amp; hail</div>
+                <div class="localmap-tl-caption" id="localmap-tl-caption">
+                    <span class="localmap-tl-summary" id="localmap-tl-summary">⏱️ Next 3 hours — the strip below shows the sky: clouds, rain, snow &amp; hail</span>
+                    <span class="localmap-tl-precip" id="localmap-tl-precip">💧 Expected rainfall: —</span>
+                </div>
                 <div class="localmap-tl-forecast" id="localmap-tl-forecast"></div>
                 <div class="localmap-tl-bar" id="localmap-tl-bar">
                     <div class="localmap-tl-ticks" id="localmap-tl-ticks"></div>
@@ -1077,12 +1341,31 @@
                 </div>
                 <div class="localmap-tl-scale" id="localmap-tl-scale"></div>
             </div>
+            <!-- 🗺️ Weather icons carried by the wind (below the radar): every
+                 icon keeps its real sky condition (sun ☀️, cloud ☁️, rain 🌧️,
+                 drizzle 🌦️, snow ❄️, hail 🧊, fog 🌫️) but drifts through its
+                 own cell like weather flowing with the wind. -->
+            <div class="localmap-icon-grid" id="localmap-icon-grid">
+                <div class="localmap-icon-grid-head">
+                    <span class="localmap-icon-grid-title" id="localmap-icon-grid-title">🌬️ Weather flowing with the wind · 5×5</span>
+                </div>
+                <div class="localmap-icon-grid-cells" id="localmap-icon-grid-cells"></div>
+                <!-- 🌡️ Air-temperature bar graph @ 2 m: one bar per cell, every
+                     bar with its cell's weather icon on top — the measured 2 m
+                     counterpart to the 1.50 m feels-like values above. -->
+                <div class="localmap-tempgraph" id="localmap-tempgraph">
+                    <div class="localmap-tempgraph-head">
+                        <span class="localmap-tempgraph-title" id="localmap-tempgraph-title">🌡️ Air temperature @ 2 m</span>
+                    </div>
+                    <div class="localmap-tempgraph-bars" id="localmap-tempgraph-bars"></div>
+                </div>
+            </div>
             <div class="localmap-foot">
                 <div class="localmap-time" id="localmap-time">⏳ Next 3 hours</div>
                 <div class="localmap-legend">
-                    <span class="localmap-legend-chip c-clouds" title="Clouds — real satellite imagery + forecast cloud cover">☁️ Clouds</span>
+                    <span class="localmap-legend-chip c-clouds" title="Clouds — forecast cloud cover">☁️ Clouds</span>
                     <span class="localmap-legend-chip c-fog" title="Fog — low-lying haze">🌫️ Fog</span>
-                    <span class="localmap-legend-chip c-rain" title="Rain — live radar + forecast showers (blue cores)">🌧️ Rain</span>
+                    <span class="localmap-legend-chip c-rain" title="Rain — forecast showers (blue cores)">🌧️ Rain</span>
                     <span class="localmap-legend-chip c-snow" title="Snow — icy white">❄️ Snow</span>
                     <span class="localmap-legend-chip c-hail" title="Hail — purple">🧊 Hail</span>
                     <span class="localmap-legend-chip c-wind" title="Wind — arrows in km/h, colour = Beaufort force">💨 Wind</span>
@@ -1197,6 +1480,7 @@
         const updated = document.getElementById('updated');
         const manualBtn = document.getElementById('manual-update');
         const locationInput = document.getElementById('location-input');
+        const locationNoteEl = document.getElementById('location-note');
         const installBtn = document.getElementById('install-btn');
         const alertsBtn = document.getElementById('alerts-btn');
         const alertsStatusEl = document.getElementById('alerts-status');
@@ -1217,6 +1501,8 @@
         const localMapTlArrival = document.getElementById('localmap-tl-arrival');
         const localMapTlScale = document.getElementById('localmap-tl-scale');
         const localMapTlCaption = document.getElementById('localmap-tl-caption');
+        const localMapTlSummary = document.getElementById('localmap-tl-summary');
+        const localMapTlPrecip = document.getElementById('localmap-tl-precip');
         const localMapTlForecast = document.getElementById('localmap-tl-forecast');
         const localMapPlayBtn = document.getElementById('localmap-play');
         const localMapFrameSlider = document.getElementById('localmap-frame');
@@ -1224,13 +1510,15 @@
         const localMapZoomInBtn = document.getElementById('localmap-zoom-in');
         const localMapZoomOutBtn = document.getElementById('localmap-zoom-out');
         const localMapZoomResetBtn = document.getElementById('localmap-zoom-reset');
+        const localMapIconGrid = document.getElementById('localmap-icon-grid');
+        const localMapIconGridTitle = document.getElementById('localmap-icon-grid-title');
         let localMapHoverCells = [];    // projected cell positions for the hover tooltip
         let activeLocation = '';
         let latestWeatherData = null;
         let selectedDayIndex = 0;
         let lastFetchedLocation = null;
 
-        // ===== 🌍 Earth globe ("You are here") =====
+        // ===== 🗺️ Bird's-eye weather icon grid (below the map) =====
         const globeCanvas = document.getElementById('globe-canvas');
         const globeCtx = globeCanvas ? globeCanvas.getContext('2d', { alpha: true }) : null;
         const globeNameEl = document.getElementById('globe-name');
@@ -1259,6 +1547,325 @@
         let lastGlobeDraw = 0;
         let lastDragPoint = null;
         let gpsCoords = null;
+
+        // ===== 🗺️ Weather icons carried by the wind (below the map) =====
+        // Every icon keeps its TRUE sky condition (sun ☀️, cloud ☁️, rain 🌧️,
+        // drizzle 🌦️, snow ❄️, hail 🧊, fog 🌫️) but drifts through its own
+        // cell like weather flowing with the wind. Each cell supplies its live
+        // wind speed + direction, so a west wind pushes every icon west, a
+        // strong gale makes them skid, and calm air leaves them floating.
+        let localMapIconFlows = [];
+        let localMapIconFlowRAF = 0;
+        let localMapIconFlowLast = 0;
+        let lastLocalMapIconCells = null;
+        let lastLocalMapIconFrame = -1;
+
+        const wrapMod2 = (v, m) => ((v % m) + m) % m;
+
+        function rebuildLocalMapIconFlow(cells) {
+            if (!localMapIconGrid || !localMapIconGridTitle) return;
+            const gridCellsEl = document.getElementById('localmap-icon-grid-cells');
+            if (!gridCellsEl) return;
+            // Stop the previous animation so it never touches the removed icons.
+            if (localMapIconFlowRAF) { cancelAnimationFrame(localMapIconFlowRAF); localMapIconFlowRAF = 0; }
+            localMapIconFlows = [];
+            gridCellsEl.innerHTML = '';
+
+            if (!cells || !cells.length) {
+                localMapIconGridTitle.textContent = 'No weather icons available';
+                return;
+            }
+            // Stable order: top-to-bottom, left-to-right across the 5×5 lattice.
+            const sorted = cells.slice().sort((a, b) => {
+                if (Math.abs(a.lat - b.lat) > 1e-6) return b.lat - a.lat;
+                return a.lon - b.lon;
+            });
+            const iconForCell = (c) => {
+                const code = c.weatherCode;
+                const cond = (c.condition || '').toLowerCase();
+                // Preferred path: real weather-code mapping
+                if (typeof code === 'number') {
+                    const codeIcons = {
+                        0: '☀️', 1: '🌤️', 2: '⛅', 3: '☁️',
+                        45: '🌫️', 48: '🌫️',
+                        51: '🌦️', 53: '🌦️', 55: '🌧️', 56: '🌨️', 57: '🌨️',
+                        61: '🌧️', 63: '🌧️', 65: '🌧️', 66: '🌨️', 67: '🌨️',
+                        71: '❄️', 73: '❄️', 75: '❄️', 77: '❄️',
+                        80: '🌦️', 81: '🌧️', 82: '🌧️',
+                        85: '❄️', 86: '❄️',
+                        95: '⛈️', 96: '⛈️', 99: '⛈️'
+                    };
+                    if (codeIcons[code]) return codeIcons[code];
+                }
+                // Fallback: text-based classification, matching the main icon rules
+                if (cond.includes('clear') || cond.includes('sunny')) return '☀️';
+                if (cond.includes('mainly clear')) return '🌤️';
+                if (cond.includes('partly')) return '⛅';
+                if (cond.includes('cloud') || cond.includes('overcast')) return '☁️';
+                if (cond.includes('drizzle') || cond.includes('showers')) return '🌦️';
+                if (cond.includes('rain')) return '🌧️';
+                if (cond.includes('thunder')) return '⛈️';
+                if (cond.includes('snow') || cond.includes('sleet') || cond.includes('hail')) return '❄️';
+                if (cond.includes('fog') || cond.includes('mist')) return '🌫️';
+                if (cond.includes('wind') || cond.includes('smoke')) return '💨';
+                if (cond.includes('tornado') || cond.includes('sandstorm')) return '🌪️';
+                if (cond.includes('hurricane')) return '🌀';
+                return '🌡️';
+            };
+            let gustiest = 0;
+            for (let i = 0; i < sorted.length; i++) {
+                const c = sorted[i];
+                const icon = iconForCell(c);
+                // Feels-like at 1.50 m (apparent temperature) is the headline
+                // number on each flowing chip; the measured air temperature
+                // stays in the tooltip for comparison.
+                const feelsVal = typeof c.feels === 'number' ? Math.round(c.feels) : (typeof c.temp === 'number' ? Math.round(c.temp) : null);
+                const temp = feelsVal != null ? feelsVal + '°' : '—°';
+                const actualTemp = typeof c.temp === 'number' ? Math.round(c.temp) + '°C' : '—';
+                const label = (c.condition || '').trim() || 'Unknown';
+                const windKmh = Math.max(0, Math.round(Number(c.wind_speed) || 0));
+                gustiest = Math.max(gustiest, windKmh);
+
+                const el = document.createElement('div');
+                el.className = 'lmc-icon-grid-cell';
+                el.title = `${icon} ${label} · 🌡️ Feels like ${temp} (at 1.50 m) · actual ${actualTemp} · 💨 ${windKmh} km/h`;
+                el.innerHTML = `<span class="lmc-icon-grid-icon">${icon}</span><span class="lmc-icon-grid-temp">${temp}</span>`;
+                gridCellsEl.appendChild(el);
+
+                const col = i % 5, row = Math.floor(i / 5);
+                const fromDeg = typeof c.wind_direction === 'number' && Number.isFinite(c.wind_direction) ? c.wind_direction : 0;
+                const towardRad = ((fromDeg + 180) % 360) * Math.PI / 180;
+                // Screen space: +x = east/right, +y = south/down, so a north
+                // wind moves the icon UP (negative y). Speed: a 25 km/h wind
+                // crosses a cell in ~12 s; calm air drifts very slowly.
+                const spd = Math.max(0.0012, Math.min(0.05, 0.0167 * (windKmh / 25))) * (0.6 + 0.8 * ((i * 0.6180339887) % 1));
+                localMapIconFlows.push({
+                    el, col, row,
+                    x: (col + 0.5) / 5 + (((i * 0.37) % 0.2) - 0.1),
+                    y: (row + 0.5) / 5 + (((i * 0.53) % 0.2) - 0.1),
+                    vx: Math.sin(towardRad) * spd,
+                    vy: -Math.cos(towardRad) * spd,
+                    wob: 0.018 + 0.012 * ((i * 0.5772156649) % 1),
+                    phase: i * 1.7
+                });
+            }
+
+            localMapIconGridTitle.textContent = `🌬️ Weather flowing with the wind · 🌡️ feels-like @ 1.50 m · 💨 ${gustiest} km/h`;
+            localMapIconFlowLast = 0;
+            localMapIconFlowRAF = requestAnimationFrame(localMapIconFlowTick);
+        }
+
+        function localMapIconFlowTick(now) {
+            if (!localMapIconFlows.length) { localMapIconFlowRAF = 0; return; }
+            const t = now / 1000;
+            const dt = localMapIconFlowLast ? Math.min(0.1, (now - localMapIconFlowLast) / 1000) : 0.016;
+            localMapIconFlowLast = now;
+
+            if (dt > 0) {
+                for (const f of localMapIconFlows) {
+                    f.x += f.vx * dt;
+                    f.y += f.vy * dt;
+                }
+            }
+            // Wrap each icon back inside its own lattice cell, then add a gentle
+            // breath so the flow looks organic instead of mechanical.
+            const cellW = 0.2;
+            for (const f of localMapIconFlows) {
+                const x0 = f.col * cellW, y0 = f.row * cellW;
+                f.x = x0 + wrapMod2(f.x - x0, cellW);
+                f.y = y0 + wrapMod2(f.y - y0, cellW);
+                const swayX = Math.sin(t * 0.6 + f.phase) * f.wob;
+                const swayY = Math.cos(t * 0.75 + f.phase * 0.9) * f.wob;
+                // Clamp just inside the panel so edge-row icons never clip.
+                f.el.style.left = Math.min(98, Math.max(2, (f.x + swayX) * 100)) + '%';
+                f.el.style.top = Math.min(98, Math.max(2, (f.y + swayY) * 100)) + '%';
+                f.el.style.transform = 'translate(-50%, -50%)';
+            }
+            localMapIconFlowRAF = requestAnimationFrame(localMapIconFlowTick);
+        }
+
+        // Rebuilds the flow only when the cell set or the forecast frame changes.
+        function refreshLocalMapIconGrid() {
+            const data = latestLocalMapData;
+            const grid = data && data.localMap;
+            const cells = grid && Array.isArray(grid.cells) ? grid.cells : [];
+            if (cells === lastLocalMapIconCells && localMapFrame === lastLocalMapIconFrame) return;
+            lastLocalMapIconCells = cells;
+            lastLocalMapIconFrame = localMapFrame;
+            rebuildLocalMapIconFlow(cells);
+            refreshLocalMapTempGraph();
+        }
+
+        // ===== 🌡️ Air-temperature bar graph @ 2 m (under the flowing icons) =====
+        // The chips above headline the 1.50 m feels-like value; this graph shows
+        // the MEASURED air temperature at the standard 2 m height for every cell
+        // of the 5×5 grid, in the same top-to-bottom, left-to-right lattice
+        // order. Each bar carries its cell's true weather icon, is coloured by
+        // temperature, and the warmest / coldest cells get 🔥 / ❄️ markers. The
+        // graph follows the timeline: dragging the slider (or ▶ playback) redraws
+        // every bar for the frame on screen.
+        let localMapTempGraphCells = null;
+        let localMapTempGraphFrame = -1;
+
+        // Temperature → bar colour: icy blue below zero, blue for cold, teal for
+        // cool, green-yellow for mild, amber for warm, red for hot — matching the
+        // app's dark-sky palette.
+        function localMapTempBarColor(t) {
+            if (t == null) return '#4a6a94';
+            if (t <= 0) return '#7fd0ff';
+            if (t <= 10) return '#4fa3e3';
+            if (t <= 17) return '#3fc8a8';
+            if (t <= 23) return '#ffd66b';
+            if (t <= 29) return '#ff9f43';
+            return '#ff5d5d';
+        }
+
+        // Marker honesty: the extreme-cell badges must MATCH the temperature.
+        // 🔥 means genuinely hot air (≥ TEMP_HOT_MARK_C) and ❄️ means freezing
+        // air (≤ TEMP_SNOW_MARK_C); milder extremes get neutral ▲ / ▼ arrows so
+        // "warmest/coldest" never reads like a snow or heat forecast (a ❄️ on a
+        // 17 °C bar looked like "snow is coming").
+        const TEMP_HOT_MARK_C = 30;
+        const TEMP_SNOW_MARK_C = 0;
+        // Snow honesty: snow cannot fall when the air is well above freezing.
+        // A snowy weather code at warmer temperatures is a known model quirk, so
+        // such cells are shown as rain — keeping every icon honest about its
+        // temperature. Wet snow at 0…2 °C (SNOW_TOO_WARM_C) is real and stays.
+        // Same rule as the backend (honestSnowCondition in api/weather.js) so
+        // the live "now" frame and the +15 min…+3 h frames agree.
+        const SNOW_TOO_WARM_C = 2;
+        function localMapTempIconForTemp(icon, label, tempC) {
+            const snowy = String(icon || '').indexOf('❄') !== -1 || /snow/i.test(String(label || ''));
+            if (!snowy || typeof tempC !== 'number' || tempC <= SNOW_TOO_WARM_C) return { icon, label };
+            return { icon: '🌧️', label: 'Rain' };
+        }
+
+        function refreshLocalMapTempGraph() {
+            const data = latestLocalMapData;
+            const grid = data && data.localMap;
+            const cells = grid && Array.isArray(grid.cells) ? grid.cells : [];
+            if (cells === localMapTempGraphCells && localMapFrame === localMapTempGraphFrame) return;
+            localMapTempGraphCells = cells;
+            localMapTempGraphFrame = localMapFrame;
+            rebuildLocalMapTempGraph(cells);
+        }
+
+        function rebuildLocalMapTempGraph(cells) {
+            const barsEl = document.getElementById('localmap-tempgraph-bars');
+            const titleEl = document.getElementById('localmap-tempgraph-title');
+            if (!barsEl || !titleEl) return;
+
+            if (!cells || !cells.length) {
+                titleEl.textContent = '🌡️ Temperature @ 2 m — no cell data';
+                barsEl.innerHTML = '';
+                return;
+            }
+            // Same stable order as the flowing icons: top-to-bottom, left-to-
+            // right across the 5×5 lattice, so bar #n lines up with cell #n.
+            const sorted = cells.slice().sort((a, b) => {
+                if (Math.abs(a.lat - b.lat) > 1e-6) return b.lat - a.lat;
+                return a.lon - b.lon;
+            });
+
+            // Frame-aware: each bar shows its cell at the timeline frame on
+            // screen (frame 0 = live "now"). Feels-like at 1.50 m comes from the
+            // cell's own 15-minute series so the tooltip can always compare
+            // measured 2 m vs felt 1.50 m for the exact same moment.
+            const rows = sorted.map((raw) => {
+                const c = localMapFrameCell(raw, localMapFrame);
+                const s = raw && raw.series;
+                let feels = null;
+                if (s && Array.isArray(s.feels) && s.feels.length) {
+                    const i = Math.min(localMapFrame, s.feels.length - 1);
+                    if (s.feels[i] != null) feels = s.feels[i];
+                }
+                if (feels == null && typeof c.feels === 'number') feels = c.feels;
+                // Temperature-honest icon: a ❄️ snow code at 17 °C is a model
+                // quirk, not a snow forecast — show 🌧️ Rain instead.
+                const shown = localMapTempIconForTemp(c.icon || '🌡️', (c.condition || '').trim(), typeof c.temp === 'number' ? c.temp : null);
+                return {
+                    temp: typeof c.temp === 'number' ? c.temp : null,
+                    feels,
+                    icon: shown.icon || '🌡️',
+                    label: shown.label || 'Unknown',
+                    windKmh: Math.max(0, Math.round(Number(c.wind_speed) || 0)),
+                    precip: typeof c.precipitation === 'number' ? c.precipitation : 0
+                };
+            });
+            const temps = rows.map((r) => r.temp).filter((v) => v != null);
+            if (!temps.length) {
+                titleEl.textContent = '🌡️ Temperature @ 2 m — no temperature data';
+                barsEl.innerHTML = '';
+                return;
+            }
+            const tMin = Math.min(...temps);
+            const tMax = Math.max(...temps);
+            const avg = temps.reduce((a, b) => a + b, 0) / temps.length;
+            // The domain pads 1 °C beyond the extremes so no bar ever looks
+            // pegged; a minimum 2 °C span keeps small differences readable when
+            // the whole grid is nearly uniform.
+            const lo = tMin - 1;
+            const span = Math.max(2, (tMax + 1) - lo);
+
+            let hot = rows[0], cold = rows[0];
+            for (const r of rows) {
+                if (r.temp == null) continue;
+                if (hot.temp == null || r.temp > hot.temp) hot = r;
+                if (cold.temp == null || r.temp < cold.temp) cold = r;
+            }
+
+            titleEl.textContent = `🌡️ Air temperature @ 2 m · ${localMapFrameLabel(localMapFrame)} · avg ${Math.round(avg)}° · max ${Math.round(tMax)}° · min ${Math.round(tMin)}°`;
+
+            barsEl.innerHTML = '';
+            const frag = document.createDocumentFragment();
+            for (const r of rows) {
+                const col = document.createElement('div');
+                col.className = 'lm-temp-col';
+                const t = r.temp != null ? Math.round(r.temp) : null;
+                const feelsTxt = r.feels != null ? Math.round(r.feels) + '°C' : '—';
+                // Extreme badges match the temperature (see TEMP_HOT_MARK_C /
+                // TEMP_SNOW_MARK_C above): 🔥 only in real heat, ❄️ only when
+                // freezing, neutral ▲ / ▼ arrows for milder extremes.
+                let extremeMark = '';
+                let extremeNote = '';
+                if (rows.length > 1) {
+                    if (r === hot) {
+                        extremeMark = (t != null && t >= TEMP_HOT_MARK_C) ? '🔥' : '▲';
+                        extremeNote = '▲ warmest cell';
+                    } else if (r === cold) {
+                        extremeMark = (t != null && t <= TEMP_SNOW_MARK_C) ? '❄️' : '▼';
+                        extremeNote = '▼ coldest cell';
+                    }
+                }
+                col.title = `${r.icon} ${r.label} · 🌡️ ${t != null ? t + '°C' : '—'} @ 2 m · feels ${feelsTxt} @ 1.50 m · 💨 ${r.windKmh} km/h · 💧 ${r.precip} mm${extremeNote ? ' · ' + extremeNote : ''}`;
+                if (r === hot && rows.length > 1) col.classList.add('hot');
+                if (r === cold && rows.length > 1) col.classList.add('cold');
+
+                const icon = document.createElement('span');
+                icon.className = 'lm-temp-icon';
+                icon.textContent = r.icon;
+                const val = document.createElement('span');
+                val.className = 'lm-temp-val';
+                let valText = t != null ? t + '°' : '—°';
+                if (extremeMark) valText += ' ' + extremeMark;
+                val.textContent = valText;
+                const track = document.createElement('span');
+                track.className = 'lm-temp-track';
+                if (t != null) {
+                    const bar = document.createElement('span');
+                    bar.className = 'lm-temp-bar';
+                    const pct = Math.max(0, Math.min(100, ((r.temp - lo) / span) * 100));
+                    bar.style.height = pct + '%';
+                    bar.style.background = `linear-gradient(180deg, ${localMapTempBarColor(t)}, ${localMapTempBarColor(t)}cc)`;
+                    track.appendChild(bar);
+                }
+                col.appendChild(icon);
+                col.appendChild(val);
+                col.appendChild(track);
+                frag.appendChild(col);
+            }
+            barsEl.appendChild(frag);
+        }
 
         // ===== 🌩️ Weather effects at the "you" location (rain, fog, thunder, lightning) =====
         let youEffects = { rain: true, fog: true, thunder: true, lightning: true, snow: true, hurricane: true };
@@ -1349,6 +1956,7 @@
                     windSpeed: data.windSpeed,
                     windDirection: data.windDirection,
                     beaufort: data.beaufort,
+                    feelsLike: data.feelsLike,
                     statusLabel: 'Live now'
                 };
             }
@@ -1360,6 +1968,7 @@
                     windSpeed: data.windSpeed,
                     windDirection: data.windDirection,
                     beaufort: data.beaufort,
+                    feelsLike: data.feelsLike,
                     statusLabel: 'Live now'
                 };
             }
@@ -1369,6 +1978,9 @@
                 windSpeed: day.windSpeed,
                 windDirection: day.windDirection,
                 beaufort: day.beaufort,
+                // Forecast days carry the feels-like range; show the daytime
+                // (max) value, matching the H:/L: temperature presentation.
+                feelsLike: day.feelsHigh ?? day.feelsLow,
                 statusLabel: `Forecast · ${day.day}`
             };
         }
@@ -1381,12 +1993,14 @@
             const windSpeedEl = document.getElementById('stat-wind-speed');
             const windDirectionEl = document.getElementById('stat-wind-direction');
             const beaufortEl = document.getElementById('stat-beaufort');
+            const feelsEl = document.getElementById('stat-feels');
             const statusPill = document.getElementById('status-pill');
 
             if (humidityEl) humidityEl.textContent = `${stats.humidity ?? '—'}%`;
             if (windSpeedEl) windSpeedEl.textContent = `${stats.windSpeed ?? '—'} km/h`;
             if (windDirectionEl) windDirectionEl.textContent = stats.windDirection ?? '—';
             if (beaufortEl) beaufortEl.textContent = stats.beaufort ?? '—';
+            if (feelsEl) feelsEl.textContent = stats.feelsLike != null ? `${stats.feelsLike}°C` : '—';
             if (statusPill) statusPill.textContent = stats.statusLabel;
 
             document.querySelectorAll('.forecast-day').forEach((el) => {
@@ -1502,12 +2116,14 @@
                 const low = day.low !== null ? `${day.low}°` : '—';
                 const dayIcon = getWeatherIcon(day.condition, day.weatherCode) || day.icon || '🌡️';
                 const selectedClass = index === selectedDayIndex ? ' selected' : '';
+                const feels = day.feelsHigh != null ? `${day.feelsHigh}°` : null;
                 return `
                     <button type="button" class="forecast-day${selectedClass}" data-day-index="${index}" aria-pressed="${index === selectedDayIndex}">
                         <div class="forecast-day-name">${day.day}</div>
                         <div class="forecast-day-icon" aria-label="${day.condition}">${dayIcon}</div>
                         <div class="forecast-day-condition">${day.condition}</div>
                         <div class="forecast-day-temps">H: ${high} / L: ${low}</div>
+                        ${feels ? `<div class="forecast-day-temps">🌡️ Feels: ${feels}</div>` : ''}
                     </button>
                 `;
             }).join('');
@@ -1546,7 +2162,7 @@
                 const uv = typeof slot.uvPct === 'number' ? `☀️ ${slot.uvPct}%` : '';
                 const condShort = String(slot.condition || '').replace('Showers', 'Shwr').replace('Slight ', '').replace('Heavy ', '');
                 return `
-                    <div class="nowcast-slot${extra}" title="${slot.condition} · ${slot.precipMm || 0}mm · ${slot.precipProb}% · ${slot.windKmh || 0} km/h${typeof slot.uvIndex === 'number' ? ` · UV ${slot.uvIndex} · sun ${slot.uvPct}%` : ''}">
+                    <div class="nowcast-slot${extra}" title="${slot.condition} · 🌡️ feels ${slot.feelsLike != null ? slot.feelsLike + '°C' : '—'} (1.50 m) · ${slot.precipMm || 0}mm · ${slot.precipProb}% · ${slot.windKmh || 0} km/h${typeof slot.uvIndex === 'number' ? ` · UV ${slot.uvIndex} · sun ${slot.uvPct}%` : ''}">
                         <div class="slot-time">${slot.label}</div>
                         <div class="slot-icon">${slot.icon}</div>
                         <div class="slot-cond">${condShort}</div>
@@ -1605,6 +2221,21 @@
                         a: 0.65 + 0.35 * p,
                         r2: Math.round(100 + 100 * p), g2: Math.round(180 + 50 * p), b2: 255,
                         dot: '💧', heavy: p
+                    };
+                }
+                case 'drizzle': {
+                    // Trace drizzle: a small, pale-blue haze — clearly lighter
+                    // than the vivid rain blob, so just drizzling under a sunny
+                    // sky never reads as a downpour. heavy stays 0: the paint
+                    // loop keeps the radius small and skips the white shower
+                    // rim and the animated rain streaks.
+                    const p = Math.min(1, (cell.precipitation || 0) / 0.3);
+                    return {
+                        cloud: true,
+                        r: 130, g: 170, b: 235,
+                        a: 0.3 + 0.15 * p,
+                        r2: 175, g2: 205, b2: 250,
+                        dot: '🌦️', heavy: 0
                     };
                 }
                 case 'fog': {
@@ -1680,6 +2311,7 @@
         let latestLocalMapFrameTimes = null;   // epoch ms per frame (clock times)
         let localMapPlayTimer = 0;
         let localMapRedrawPending = false;
+        let localMapAutoPlayed = false;   // ▶ auto-starts once the first forecast data has rendered
 
         // ===== 🗺️ Radar layer toggles: which overlays the top-down screen shows.
         // 'topo' = OpenTopoMap terrain basemap (great view from above, shows the
@@ -1689,31 +2321,54 @@
         try {
             const savedLayers = JSON.parse(localStorage.getItem('localmap-layers') || 'null');
             if (savedLayers && typeof savedLayers === 'object') localMapLayers = { ...LOCALMAP_LAYER_DEFAULTS, ...savedLayers };
+            // Bright & colourful is the default: the map is easy to read, streets
+            // and parks stay crisp, and the weather cells sit beautifully on top.
+            // The dark night-radar style stays one tap away (🌙 Dark).
+            localMapLayers.topo = true;
+            try { localStorage.setItem('localmap-layers', JSON.stringify(localMapLayers)); } catch (err2) { /* private mode */ }
+            try { localStorage.setItem('localmap-vector-migrated', '2'); } catch (err3) { /* private mode */ }
         } catch (err) { /* fresh defaults on first visit */ }
-        let localMapBasemap = localMapLayers.topo ? 'topo' : 'osm';   // 'topo' (OpenTopoMap) or 'osm' (street map)
+        let localMapBasemap = localMapLayers.topo ? 'topo' : 'osm';   // 'topo' (colourful vector) or 'osm' (dark vector)
 
         // Same classification the backend uses (api/weather.js classifyLocalCell)
-        // so a future frame reads exactly like the live view does.
+        // so a future frame reads exactly like the live view does. Trace amounts
+        // (drizzle codes 51–57, or 0 < mm < 0.3) get their own faint drizzle
+        // class so a sun shower never paints like a downpour.
+        const LOCALMAP_RAIN_MIN_MM = 0.3;
+        // Snowy WMO codes: snow falls (71–77) + snow showers (85/86); a snowfall
+        // amount > 0 counts too. Keep in sync with SNOW_CODES in api/weather.js.
+        function localMapIsSnowy(code, snowfall) {
+            return (code >= 71 && code <= 77) || code === 85 || code === 86 || snowfall > 0;
+        }
         function localMapClassify(code, precipitation, snowfall, cloudCover) {
             if (code === 96 || code === 99) return 'hail';
-            if ((code >= 71 && code <= 77) || code === 85 || code === 86 || snowfall > 0) return 'snow';
-            if ((code >= 51 && code <= 67) || (code >= 80 && code <= 82) || precipitation > 0) return 'rain';
+            if (localMapIsSnowy(code, snowfall)) return 'snow';
+            if (precipitation >= LOCALMAP_RAIN_MIN_MM) return 'rain';
+            if ((code >= 61 && code <= 67) || (code >= 80 && code <= 82)) return 'rain';
+            if ((code >= 51 && code <= 57) || precipitation > 0) return 'drizzle';
             if (code === 45 || code === 48) return 'fog';
             if (cloudCover >= 40) return 'clouds';
             return 'clear';
         }
 
+        // Icon map: the weather condition → emoji painted on the map cells.
+        // The user-facing icon set — clouds determine the icon shown:
+        //   ☀️ Sunny · ⛅ Partly Cloudy · ☁️ Cloudy · 🌧️ Rain · 🌦️ Showers/Drizzle
+        //   ⛈️ Thunderstorm · ❄️ Snow · 🌫️ Fog · 💨 Windy · 🧊 Hail
+        //   🌪️ Tornado · 🌀 Hurricane · 🌡️ Other
         const LOCALMAP_CODE_INFO = {
-            0: ['Clear', '☀️'], 1: ['Mostly Clear', '🌤️'], 2: ['Partly Cloudy', '⛅'], 3: ['Overcast', '☁️'],
+            0: ['Clear', '☀️'], 1: ['Mostly Clear', '☀️'], 2: ['Partly Cloudy', '⛅'], 3: ['Overcast', '☁️'],
             45: ['Fog', '🌫️'], 48: ['Rime Fog', '🌫️'],
-            51: ['Light Drizzle', '🌦️'], 53: ['Drizzle', '🌦️'], 55: ['Heavy Drizzle', '🌧️'],
+            51: ['Light Drizzle', '🌦️'], 53: ['Drizzle', '🌦️'], 55: ['Heavy Drizzle', '🌦️'],
             61: ['Light Rain', '🌦️'], 63: ['Rain', '🌧️'], 65: ['Heavy Rain', '🌧️'],
             66: ['Freezing Rain', '🌧️'], 67: ['Freezing Rain', '🌧️'],
-            71: ['Light Snow', '🌨️'], 73: ['Snow', '🌨️'], 75: ['Heavy Snow', '❄️'], 77: ['Snow Grains', '🌨️'],
-            80: ['Light Showers', '🌦️'], 81: ['Showers', '🌧️'], 82: ['Violent Showers', '⛈️'],
-            85: ['Snow Showers', '🌨️'], 86: ['Snow Showers', '❄️'],
-            95: ['Thunderstorm', '⛈️'], 96: ['Hail Storm', '🌨️'], 99: ['Hail Storm', '🌨️']
+            71: ['Light Snow', '❄️'], 73: ['Snow', '❄️'], 75: ['Heavy Snow', '❄️'], 77: ['Snow Grains', '❄️'],
+            80: ['Light Showers', '🌦️'], 81: ['Showers', '🌦️'], 82: ['Violent Showers', '⛈️'],
+            85: ['Snow Showers', '❄️'], 86: ['Snow Showers', '❄️'],
+            95: ['Thunderstorm', '⛈️'], 96: ['Hail Storm', '🧊'], 99: ['Hail Storm', '🧊']
         };
+        // Fallback icon for any unmapped code
+        const LOCALMAP_ICON_OTHER = '🌡️';
 
         // The version of a grid cell at 15-minute frame idx: the live snapshot for
         // idx 0, otherwise the cell's own minutely_15 series value for that slot.
@@ -1727,29 +2382,42 @@
             const cloudCover = s.cloud && s.cloud[i] != null ? s.cloud[i] : cell.cloudCover || 0;
             const windSpeed = s.wind && s.wind[i] != null ? s.wind[i] : cell.wind_speed || 0;
             const windDirection = s.windDir && s.windDir[i] != null ? s.windDir[i] : cell.wind_direction || 0;
-            const info = LOCALMAP_CODE_INFO[code] || ['Cloudy', '☁️'];
+            const temp = s.temps && s.temps[i] != null ? s.temps[i] : cell.temp;
+            let info = LOCALMAP_CODE_INFO[code] || ['Other', LOCALMAP_ICON_OTHER];
+            let typeCode = code;
+            let typeSnow = snowfall;
+            // Snow cannot fall when the air is well above freezing: a snowy code
+            // at warm temperatures is a model quirk, so those frames read as rain
+            // — the icon, the map blob type and the 🌡️ bar graph all match the
+            // temperature (SNOW_TOO_WARM_C, same rule as the backend).
+            if (typeof temp === 'number' && temp > SNOW_TOO_WARM_C && localMapIsSnowy(code, snowfall)) {
+                info = ['Rain', '🌧️'];
+                typeCode = 63;
+                typeSnow = 0;
+            }
             return {
                 lat: cell.lat, lon: cell.lon,
-                type: localMapClassify(code, precipitation, snowfall, cloudCover),
+                type: localMapClassify(typeCode, precipitation, typeSnow, cloudCover),
                 condition: info[0], icon: info[1], weatherCode: code,
-                temp: s.temps && s.temps[i] != null ? s.temps[i] : cell.temp,
+                temp,
                 precipitation, snowfall, cloudCover,
                 wind_speed: windSpeed, wind_direction: windDirection
             };
         }
 
-        // ===== 🗺️ Real-map background behind the weather field. The default basemap
-        // is OpenTopoMap — true terrain tiles (countryside, contours, elevation
-        // shading, mountains and gullies) which give the "view from above" much
-        // more depth than a plain street map. CARTO's Voyager street tiles are
-        // available through the 🗺️ Terrain layer button and act as the fallback
-        // when OpenTopoMap is busy. tile.openstreetmap.org is deliberately NOT
-        // used any more: it rate-limits embedded apps and answers with a blank
-        // 256×256 "blocked" placeholder that silently erased the whole map.
+        // ===== 🗺️ Real-map background behind the weather field. Both basemaps
+        // are CARTO Voyager NO-LABELS tiles: the same countryside / street map
+        // with every baked-in place name and white village dot removed, so the
+        // black names and white spots no longer appear on the "view from above".
+        // The app draws its OWN labels (drawLocalMapPlaceLabels) — dark pills
+        // with light text at the true geo position — and those remain the only
+        // text on the map. tile.openstreetmap.org is deliberately NOT used:
+        // it rate-limits embedded apps and answers with a blank 256×256
+        // "blocked" placeholder that silently erased the whole map.
         // Tiles are fetched once per view, cached in memory, and drawn through
         // the SAME lat/lon → pixel mapping as the weather grid, so clouds stay
         // pinned to real places.
-        // Attribution: © OpenTopoMap (CC-BY-SA) · © OpenStreetMap contributors · SRTM
+        // Attribution: © OpenStreetMap contributors · © CARTO
         const localMapTiles = new Map();      // 'source/z/x/y' -> { img, ok, done }
 
         function localMapScheduleRedraw() {
@@ -1779,15 +2447,19 @@
             entry = { img, ok: false, done: false };
             img.crossOrigin = 'anonymous';
             const sub = 'abc'[(x + y + z) % 3];
-            // OpenTopoMap first (when selected); CARTO Voyager is the reliable
-            // fallback. tile.openstreetmap.org is deliberately NOT in the queue —
+            // CARTO's Voyager NO-LABELS tiles ONLY — voyager_nolabels is the
+            // same street map minus every baked-in place name and white village
+            // dot, so the map's own labels stay the ONLY text on the radar.
+            // OpenTopoMap and labeled voyager are deliberately NOT in the queue:
+            // they paint black city/village names + white spots into the tile
+            // images themselves. tile.openstreetmap.org is also NOT in the queue —
             // it rate-limits apps and answers with a blank 256×256 "blocked"
             // placeholder (verified live: HTTP 200 + x-blocked header), which
             // passed the size check and silently blanked the map. CARTO serves
             // real tiles with CORS and no blocking (verified 200/256×256/ACAO:*).
             const queue = source === 'topo'
-                ? [`https://${sub}.tile.opentopomap.org/${z}/${x}/${y}.png`, `https://basemaps.cartocdn.com/rastertiles/voyager/${z}/${x}/${y}.png`]
-                : [`https://basemaps.cartocdn.com/rastertiles/voyager/${z}/${x}/${y}.png`];
+                ? [`https://${sub}.basemaps.cartocdn.com/rastertiles/voyager_nolabels/${z}/${x}/${y}.png`]
+                : [`https://${sub}.basemaps.cartocdn.com/rastertiles/voyager_nolabels/${z}/${x}/${y}.png`];
             const tryNext = () => {
                 if (!queue.length) {
                     entry.done = true;
@@ -1850,224 +2522,6 @@
             return 0.5 - Math.log(Math.tan(Math.PI / 4 + r / 2)) / (2 * Math.PI);
         };
         const latAtWorld = (wy) => (180 / Math.PI) * Math.atan(Math.sinh(Math.PI - 2 * Math.PI * wy));
-
-        // ===== 🌧️ Live rain radar: RainViewer's free, keyless radar tiles, drawn
-        // as a layer between the dark basemap and the forecast cloud deck. Tiles
-        // use the SAME Web Mercator scheme as the Esri basemap above, so the
-        // measured rain blobs line up exactly with streets and towns. No API key
-        // needed — https://www.rainviewer.com/api.html. Tiles are semi-transparent
-        // (no-rain areas are clear), so the streets show through where it's dry.
-        let rainviewerFrames = null;       // { host, past: [{time, path}], nowcast: [...] }
-        let rainviewerFetchInFlight = null;
-        let rainviewerLastFetch = 0;
-        const RAINVIEWER_REFRESH_MS = 5 * 60 * 1000;   // RainViewer updates ~10 min
-
-        function fetchRainviewerFrames() {
-            const now = Date.now();
-            if (rainviewerFrames && now - rainviewerLastFetch < RAINVIEWER_REFRESH_MS) return;
-            if (rainviewerFetchInFlight) return;
-            rainviewerFetchInFlight = fetch('https://api.rainviewer.com/public/weather-maps.json')
-                .then((r) => r.ok ? r.json() : null)
-                .then((d) => {
-                    if (d && d.host && d.radar) {
-                        rainviewerFrames = {
-                            host: d.host,
-                            past: d.radar.past || [],
-                            nowcast: d.radar.nowcast || [],
-                            // Real satellite cloud imagery (IR cloud tops). Frames are
-                            // `{ time, path }`, exactly like the radar frames.
-                            satellite: (d.satellite && Array.isArray(d.satellite.infrared)) ? d.satellite.infrared : []
-                        };
-                        rainviewerLastFetch = Date.now();
-                        localMapScheduleRedraw();
-                    }
-                })
-                .catch(() => { /* offline → radar layer simply stays blank */ })
-                .finally(() => { rainviewerFetchInFlight = null; });
-        }
-
-        const rainviewerTiles = new Map();     // 'path/z/x/y' -> { img, ok, done }
-
-        // Validates that a tile is real radar data (not an error placeholder).
-        // RainViewer returns a 256x256 image with "zoom level not supported" text
-        // when the zoom level isn't available — same size as real tiles, so we
-        // must check the PIXEL CONTENT. Real tiles have colored rain pixels
-        // (blue→green→yellow→red) and/or transparent gaps; error tiles are gray.
-        function isRealRainviewerTile(img) {
-            if (img.naturalWidth !== 256 || img.naturalHeight !== 256) return false;
-            const c = document.createElement('canvas');
-            c.width = 256; c.height = 256;
-            const g = c.getContext('2d', { willReadFrequently: true });
-            if (!g) return false;
-            g.drawImage(img, 0, 0, 256, 256);
-            let id;
-            try { id = g.getImageData(0, 0, 256, 256); } catch (err) { return false; }
-            const px = id.data;
-            let transparent = 0;
-            let colored = 0;
-            let gray = 0;
-            let sampled = 0;
-            for (let y = 0; y < 256; y += 4) {
-                for (let x = 0; x < 256; x += 4) {
-                    const i = (y * 256 + x) * 4;
-                    const r = px[i], gg = px[i + 1], b = px[i + 2], a = px[i + 3];
-                    if (a < 20) {
-                        transparent++;
-                    } else {
-                        const maxC = Math.max(r, gg, b);
-                        const minC = Math.min(r, gg, b);
-                        if (maxC - minC > 30 && maxC > 60) {
-                            colored++;
-                        } else if (maxC - minC < 25 && r > 120) {
-                            gray++;
-                        }
-                    }
-                    sampled++;
-                }
-            }
-            const coloredFrac = colored / sampled;
-            const grayFrac = gray / sampled;
-            const transparentFrac = transparent / sampled;
-            // Has rain colors → real tile
-            if (coloredFrac > 0.008) return true;
-            // Mostly transparent with a little color → real (light rain)
-            if (transparentFrac > 0.5 && coloredFrac > 0.002) return true;
-            // Mostly transparent, no color → real (no rain area)
-            if (transparentFrac > 0.85) return true;
-            // Mostly gray, no color → error tile
-            if (grayFrac > 0.5 && coloredFrac < 0.003) return false;
-            // Opaque with no color → error tile
-            if (transparentFrac < 0.1 && coloredFrac < 0.003) return false;
-            return false;
-        }
-
-        function rainviewerGetTile(path, z, x, y) {
-            const key = `${path}/${z}/${x}/${y}`;
-            let entry = rainviewerTiles.get(key);
-            if (entry) return entry;
-            if (rainviewerTiles.size > 120) {
-                const it = rainviewerTiles.keys();
-                for (let i = 0; i < 40; i += 1) {
-                    const k = it.next().value;
-                    if (k !== undefined) rainviewerTiles.delete(k);
-                }
-            }
-            const img = new Image();
-            img.crossOrigin = 'anonymous';
-            entry = { img, ok: false, done: false };
-            img.onload = () => {
-                entry.done = true;
-                entry.ok = isRealRainviewerTile(img);
-                localMapScheduleRedraw();
-            };
-            img.onerror = () => { entry.done = true; entry.ok = false; };
-            const host = rainviewerFrames && rainviewerFrames.host ? rainviewerFrames.host : 'https://tilecache.rainviewer.com';
-            img.src = `${host}${path}/256/${z}/${x}/${y}/8/1_1.png`;
-            rainviewerTiles.set(key, entry);
-            return entry;
-        }
-
-        // ===== ☁️ Real clouds: RainViewer satellite infrared imagery, drawn as a
-        // translucent veil between the basemap and the rain radar. Only BRIGHT
-        // pixels survive the mask (cold, thick cloud tops stay white; land, sea
-        // and bare ground turn transparent), so you see where real clouds are.
-        // Satellite is measured "now" only — future frames keep the predicted
-        // cloud field instead, so we never show a *guess* as *reality*.
-        const rainviewerSatTiles = new Map();   // 'path/z/x/y' -> { img, ok, done, masked }
-
-        function cloudMaskedTile(img) {
-            // One-off per tile: copy to an offscreen canvas and turn dark/mid
-            // pixels transparent while keeping bright cloud tops white-ish.
-            const c = document.createElement('canvas');
-            c.width = 256;
-            c.height = 256;
-            const g = c.getContext('2d', { willReadFrequently: true });
-            if (!g) return null;
-            g.drawImage(img, 0, 0, 256, 256);
-            let id;
-            try { id = g.getImageData(0, 0, 256, 256); } catch (err) { return null; }
-            const px = id.data;
-            for (let i = 0; i < px.length; i += 4) {
-                // Brightest channel keeps most IR colour schemes (incl. enhanced)
-                // picking out the luminous cloud tops.
-                const bright = px[i] > px[i + 1] ? px[i] : px[i + 1];
-                const b = bright > px[i + 2] ? bright : px[i + 2];
-                let a = (b - 158) / 85;       // 0 below 158 → 1 at 243+
-                a = Math.max(0, Math.min(0.72, a));
-                px[i + 3] = Math.round(a * 255);
-            }
-            g.putImageData(id, 0, 0);
-            return c;
-        }
-
-        function rainviewerSatGetTile(path, z, x, y) {
-            const key = `${path}/${z}/${x}/${y}`;
-            let entry = rainviewerSatTiles.get(key);
-            if (entry) return entry;
-            if (rainviewerSatTiles.size > 60) {
-                const it = rainviewerSatTiles.keys();
-                for (let i = 0; i < 20; i += 1) {
-                    const k = it.next().value;
-                    if (k !== undefined) rainviewerSatTiles.delete(k);
-                }
-            }
-            const img = new Image();
-            img.crossOrigin = 'anonymous';
-            entry = { img, ok: false, done: false, masked: null };
-            img.onload = () => {
-                entry.done = true;
-                entry.ok = isRealRainviewerTile(img);
-                if (entry.ok) {
-                    entry.masked = cloudMaskedTile(img);
-                    if (!entry.masked) entry.ok = false;
-                }
-                localMapScheduleRedraw();
-            };
-            img.onerror = () => { entry.done = true; entry.ok = false; };
-            const host = rainviewerFrames && rainviewerFrames.host ? rainviewerFrames.host : 'https://tilecache.rainviewer.com';
-            img.src = `${host}${path}/256/${z}/${x}/${y}/8/1_0.png`;
-            rainviewerSatTiles.set(key, entry);
-            return entry;
-        }
-
-        function drawLocalMapCloudOverlay(ctx, proj, frameEpochMs, isNow) {
-            if (!isNow) return;   // measured clouds only apply to the "Now" frame
-            if (!rainviewerFrames || !Array.isArray(rainviewerFrames.satellite) || !rainviewerFrames.satellite.length) return;
-            const frame = rainviewerFrames.satellite[rainviewerFrames.satellite.length - 1];   // newest IR pass
-            if (frameEpochMs / 1000 - frame.time > 3 * 60 * 60) return;   // satellite older than 3 h → skip
-            const { PAD, mapW, mapH, k, worldX0, worldY0, gridX0, gridY0 } = proj;
-            // Straight-down view: invert the whole canvas (incl. padding) from
-            // pixels back to world units, then cover it with Mercator tiles.
-            const lonMin = (worldX0 - PAD / k) * 360 - 180;
-            const lonMax = (worldX0 + (mapW + PAD) / k) * 360 - 180;
-            const latMax = latAtWorld(worldY0 - PAD / k);
-            const latMin = latAtWorld(worldY0 + (mapH + PAD) / k);
-            const zoom = Math.max(7, Math.min(7, Math.floor(Math.log2(k) - 8)));
-            const n = Math.pow(2, zoom);
-            const tile = k / n;   // one 256-px tile in canvas px (shared scale)
-            const tx0 = Math.floor(((lonMin + 180) / 360) * n);
-            const tx1 = Math.floor(((lonMax + 180) / 360) * n);
-            const ty0 = Math.floor(tileYFrac(latMax, zoom));
-            const ty1 = Math.floor(tileYFrac(latMin, zoom));
-            ctx.save();
-            ctx.globalAlpha = 0.85;
-            ctx.beginPath();
-            ctx.rect(PAD, PAD, mapW, mapH);
-            ctx.clip();
-            for (let ty = ty0; ty <= ty1; ty += 1) {
-                for (let tx = tx0; tx <= tx1; tx += 1) {
-                    const entry = rainviewerSatGetTile(frame.path, zoom, tx, ty);
-                    if (!entry.done || !entry.ok || !entry.masked) continue;
-                    const latTop = tileLat(ty, zoom);
-                    const lonL = tileLon(tx, zoom);
-                    const x = gridX0 + (worldXof(lonL) - worldX0) * k;
-                    const y = gridY0 + (worldYof(latTop) - worldY0) * k;   // world-Y grows southward
-                    if (tile <= 0) continue;
-                    ctx.drawImage(entry.masked, x, y, tile, tile);
-                }
-            }
-            ctx.restore();
-        }
 
         function drawLocalMapTiles(ctx, proj) {
             const { PAD, mapW, mapH, k, worldX0, worldY0, gridX0, gridY0 } = proj;
@@ -2144,83 +2598,18 @@
                     ctx.fillStyle = glow;
                     ctx.fillRect(PAD, PAD, mapW, mapH);
                 }
-                // Attribution. OpenTopoMap is derived from OSM; SRTM provides the
-                // elevation data. A light halo keeps it readable on the light map.
+                // Attribution. Both basemaps are CARTO label-free Voyager tiles
+                // derived from OSM. A light halo keeps it readable on the map.
                 ctx.font = '500 9px system-ui, sans-serif';
                 ctx.textAlign = 'right';
                 ctx.textBaseline = 'bottom';
-                const credit = localMapBasemap === 'topo'
-                    ? '© OpenTopoMap (CC-BY-SA) · © OpenStreetMap contributors · SRTM'
-                    : '© OpenStreetMap contributors · © CARTO';
+                const credit = '© OpenStreetMap contributors · © CARTO';
                 ctx.lineWidth = 3;
                 ctx.strokeStyle = localMapBasemap === 'topo' ? 'rgba(255, 255, 255, 0.75)' : 'rgba(4, 12, 28, 0.7)';
                 ctx.strokeText(credit, PAD + mapW - 6, PAD + mapH - 5);
                 ctx.fillStyle = localMapBasemap === 'topo' ? 'rgba(28, 44, 68, 0.8)' : 'rgba(190, 214, 240, 0.55)';
                 ctx.fillText(credit, PAD + mapW - 6, PAD + mapH - 5);
                 ctx.textAlign = 'left';
-            }
-            ctx.restore();
-        }
-
-        // Pick the best RainViewer frame for a given forecast time (epoch ms):
-        // isNow → latest past (live measured rain); future → closest nowcast, or
-        // null (never show "now" rain on a future frame — that would mislead).
-        function pickRainviewerFrame(epochMs, isNow) {
-            if (!rainviewerFrames) return null;
-            const { past, nowcast } = rainviewerFrames;
-            if (isNow) {
-                if (!past || !past.length) return null;
-                return past[past.length - 1];   // most recent measurement
-            }
-            if (!nowcast || !nowcast.length) return null;
-            const target = epochMs / 1000;
-            let best = null;
-            let bestDiff = Infinity;
-            for (const f of nowcast) {
-                const diff = Math.abs(f.time - target);
-                if (diff < bestDiff) { bestDiff = diff; best = f; }
-            }
-            // Only use nowcast if it's within 30 min of the target forecast time
-            return best && bestDiff < 30 * 60 ? best : null;
-        }
-
-        function drawLocalMapRadarOverlay(ctx, proj, frameEpochMs, isNow) {
-            const frame = pickRainviewerFrame(frameEpochMs, isNow);
-            if (!frame) return;
-            const { PAD, mapW, mapH, uniqLon, uniqLat, lonSpan, latSpan, xAt, yAt } = proj;
-            const mLon = lonSpan * 0.08;
-            const mLat = latSpan * 0.08;
-            const lonMin = uniqLon[0] - mLon;
-            const lonMax = uniqLon[uniqLon.length - 1] + mLon;
-            const latMin = uniqLat[0] - mLat;
-            const latMax = uniqLat[uniqLat.length - 1] + mLat;
-            // RainViewer supports zoom 0-8 reliably; clamp so we never request
-            // tiles that return "zoom level not supported" error images.
-            const zoom = Math.max(8, Math.min(8, Math.ceil(Math.log2((360 * mapW) / (256 * (lonMax - lonMin))))));
-            const n = Math.pow(2, zoom);
-            const dLon = 360 / n;
-            const tx0 = Math.floor(((lonMin + 180) / 360) * n);
-            const tx1 = Math.floor(((lonMax + 180) / 360) * n);
-            const ty0 = Math.floor(tileYFrac(latMax, zoom));
-            const ty1 = Math.floor(tileYFrac(latMin, zoom));
-            ctx.save();
-            ctx.beginPath();
-            ctx.rect(PAD, PAD, mapW, mapH);
-            ctx.clip();
-            for (let ty = ty0; ty <= ty1; ty += 1) {
-                for (let tx = tx0; tx <= tx1; tx += 1) {
-                    const entry = rainviewerGetTile(frame.path, zoom, tx, ty);
-                    if (!entry.done || !entry.ok) continue;
-                    const latTop = tileLat(ty, zoom);
-                    const latBot = tileLat(ty + 1, zoom);
-                    const lonL = tileLon(tx, zoom);
-                    const x = xAt(lonL);
-                    const y = yAt(latTop);
-                    const w = xAt(lonL + dLon) - x;
-                    const h = yAt(latBot) - y;
-                    if (w <= 0 || h <= 0) continue;
-                    ctx.drawImage(entry.img, x, y, w, h);
-                }
             }
             ctx.restore();
         }
@@ -2385,9 +2774,12 @@
             }
             if (localMapFrameTimeEl) localMapFrameTimeEl.textContent = localMapFrameLabel(localMapFrame);
             highlightLocalMapFrame();
+            positionLocalMapTimelineNeedle();
             if (latestLocalMapData && latestLocalMapData.localMap && Array.isArray(latestLocalMapData.localMap.cells) && latestLocalMapData.localMap.cells.length) {
                 drawLocalMap(latestLocalMapData, performance.now() / 1000);
             }
+            // 🌡️ The temperature graph follows the same timeline frame as the map.
+            refreshLocalMapTempGraph();
         }
 
         function highlightLocalMapFrame() {
@@ -2395,6 +2787,29 @@
             localMapTlForecast.querySelectorAll('i[data-idx]').forEach((el) => {
                 el.classList.toggle('sel', Number(el.dataset.idx) === localMapFrame);
             });
+        }
+
+        // 🔴 Red "now" needle follows the forecast time actually on screen:
+        // at frame 0 it sits at the real clock time, and as the ▶ preview
+        // plays (or the slider is dragged) it slides along the timeline with
+        // the +15 min…+3 h forecast being shown — so the red line is never
+        // frozen while the weather ahead of it changes.
+        function localMapNeedlePct() {
+            const data = latestLocalMapData;
+            const timeline = data && data.nowcast && Array.isArray(data.nowcast.timeline) ? data.nowcast.timeline : [];
+            if (!timeline.length) return 0;
+            const slotMs = 15 * 60 * 1000;
+            const startMs = new Date(timeline[0].time).getTime();
+            const windowMs = timeline.length * slotMs;
+            const targetMs = localMapFrame <= 0
+                ? Date.now()
+                : (latestLocalMapFrameTimes && latestLocalMapFrameTimes[localMapFrame]) || (startMs + localMapFrame * slotMs);
+            return Math.max(0, Math.min(100, ((targetMs - startMs) / windowMs) * 100));
+        }
+
+        function positionLocalMapTimelineNeedle() {
+            if (!localMapTlNow || !latestLocalMapData) return;
+            localMapTlNow.style.left = `${localMapNeedlePct()}%`;
         }
 
         // ▶ Movie loop: advance one 15-minute frame every 0.75 s, with a short
@@ -2429,7 +2844,7 @@
         }
 
         // Small "⏩ +45 min · 15:15" pill in the canvas top-right whenever a
-        // future frame is on screen (frame 0 = live radar shows nothing).
+        // future frame is on screen (frame 0 = live view shows nothing).
         function drawLocalMapFrameBadge(ctx, cssW, label) {
             if (!label) return;
             ctx.font = '800 11px system-ui, -apple-system, sans-serif';
@@ -2562,22 +2977,6 @@
             //    with the weather grid, plus a light radar tint on top of them.
             drawLocalMapTiles(ctx, proj);
 
-            // 0.5) Real satellite clouds (RainViewer IR) when the Clouds layer is
-            //     on — drawn right above the basemap so they sit *under* the rain.
-            const frameEpochMs = latestLocalMapFrameTimes && latestLocalMapFrameTimes[localMapFrame]
-                ? latestLocalMapFrameTimes[localMapFrame]
-                : Date.now();
-            if (localMapLayers.clouds) {
-                drawLocalMapCloudOverlay(ctx, proj, frameEpochMs, localMapFrame === 0);
-            }
-
-            // 0.55) Live rain radar overlay: measured precipitation from RainViewer,
-            //      drawn between the basemap and the forecast cloud deck so the
-            //      real rain shows through under the forecast blobs (Rain layer).
-            if (localMapLayers.rain) {
-                drawLocalMapRadarOverlay(ctx, proj, frameEpochMs, localMapFrame === 0);
-            }
-
             // 1) ONE continuous weather field: draw every sample as a soft
             //    radial-gradient blob that overlaps its neighbours, so the whole
             //    area reads as a single radar screen instead of 20 small tiles.
@@ -2622,10 +3021,10 @@
             for (const pt of samplePts) {
                 const cell = localMapFrameCell(pt.cell, localMapFrame);
                 const c = localMapCellColor(cell);
-                if (cell.type === 'rain' && !localMapLayers.rain) continue;
+                if ((cell.type === 'rain' || cell.type === 'drizzle') && !localMapLayers.rain) continue;
                 if (cell.type === 'snow' && !localMapLayers.snow) continue;
                 if (cell.type === 'hail' && !localMapLayers.hail) continue;
-                const isPrec = cell.type === 'rain' || cell.type === 'snow' || cell.type === 'hail';
+                const isPrec = cell.type === 'rain' || cell.type === 'drizzle' || cell.type === 'snow' || cell.type === 'hail';
                 if (!isPrec) continue;
                 const n = valueNoise(cell.lat * 3.1, cell.lon * 4.7);
                 const px = jitPx(pt, cell);
@@ -2644,51 +3043,63 @@
                 ctx.fill();
 
                 // Sharp bright rim so each shower sits clearly on the map
-                // instead of dissolving into the cloud deck behind it.
-                ctx.strokeStyle = `rgba(255, 255, 255, ${0.16 + 0.2 * heavy})`;
-                ctx.lineWidth = 1;
-                ctx.beginPath();
-                ctx.arc(px, py, radius * 0.92, 0, Math.PI * 2);
-                ctx.stroke();
+                // instead of dissolving into the cloud deck behind it — but
+                // trace drizzle stays a soft haze: no rim, no falling streaks.
+                if (cell.type !== 'drizzle') {
+                    ctx.strokeStyle = `rgba(255, 255, 255, ${0.16 + 0.2 * heavy})`;
+                    ctx.lineWidth = 1;
+                    ctx.beginPath();
+                    ctx.arc(px, py, radius * 0.92, 0, Math.PI * 2);
+                    ctx.stroke();
 
-                // Animated falling particles: rain streaks, snow flakes, hail pellets.
-                ctx.fillStyle = cell.type === 'hail'
-                    ? 'rgba(224, 190, 255, 0.95)'
-                    : cell.type === 'snow' ? 'rgba(255, 255, 255, 0.95)' : 'rgba(205, 232, 255, 0.92)';
-                const count = 3 + Math.round(4 * heavy);
-                for (let p = 0; p < count; p += 1) {
-                    const ph = hashNoise(cell.lat * 7 + p * 13.7, cell.lon * 3 + p * 7.9);
-                    const offX = (ph - 0.5) * radius * 1.5;
-                    const fall = (p * 23 + Math.floor(t * 20) * 3 + ph * 47) % 16;
-                    const offY = (ph - 0.5) * radius * 0.8 + fall * 0.7;
-                    if (cell.type === 'rain') {
-                        ctx.fillRect(px + offX, py + offY, 1.6, 4 + 2 * heavy);
-                    } else if (cell.type === 'snow') {
-                        ctx.beginPath();
-                        ctx.arc(px + offX, py + offY, 1 + heavy * 0.8, 0, Math.PI * 2);
-                        ctx.fill();
-                    } else {
-                        ctx.fillRect(px + offX, py + offY, 1.9, 1.9);
+                    // Animated falling particles: rain streaks, snow flakes, hail pellets.
+                    ctx.fillStyle = cell.type === 'hail'
+                        ? 'rgba(224, 190, 255, 0.95)'
+                        : cell.type === 'snow' ? 'rgba(255, 255, 255, 0.95)' : 'rgba(205, 232, 255, 0.92)';
+                    const count = 3 + Math.round(4 * heavy);
+                    for (let p = 0; p < count; p += 1) {
+                        const ph = hashNoise(cell.lat * 7 + p * 13.7, cell.lon * 3 + p * 7.9);
+                        const offX = (ph - 0.5) * radius * 1.5;
+                        const fall = (p * 23 + Math.floor(t * 20) * 3 + ph * 47) % 16;
+                        const offY = (ph - 0.5) * radius * 0.8 + fall * 0.7;
+                        if (cell.type === 'rain') {
+                            ctx.fillRect(px + offX, py + offY, 1.6, 4 + 2 * heavy);
+                        } else if (cell.type === 'snow') {
+                            ctx.beginPath();
+                            ctx.arc(px + offX, py + offY, 1 + heavy * 0.8, 0, Math.PI * 2);
+                            ctx.fill();
+                        } else {
+                            ctx.fillRect(px + offX, py + offY, 1.9, 1.9);
+                        }
                     }
                 }
             }
 
-            // 1c) Accent emoji icons ONLY where precipitation is actually
-            //     falling — bulk cloud cover stays as the smooth grey deck.
+            // 1c) Weather icons on EVERY cell — the icon is determined by the
+            //     cloud/weather condition (clear→☀️, partly cloudy→⛅, overcast→☁️,
+            //     rain→🌧️, drizzle→🌦️, thunderstorm→⛈️, snow→❄️, fog→🌫️, hail→🧊,
+            //     tornado→🌪️, hurricane→🌀, other→🌡️) so each cell shows exactly
+            //     what the sky looks like there.
             ctx.font = `${Math.max(13, Math.round(cellW * 0.36))}px "Segoe UI Emoji", "Apple Color Emoji", system-ui, sans-serif`;
             ctx.textAlign = 'center';
             ctx.textBaseline = 'middle';
             for (const pt of samplePts) {
                 const fCell = localMapFrameCell(pt.cell, localMapFrame);
                 const c = localMapCellColor(fCell);
-                const isAccent = (fCell.type === 'rain' && localMapLayers.rain) ||
-                    (fCell.type === 'snow' && localMapLayers.snow) ||
-                    (fCell.type === 'hail' && localMapLayers.hail);
-                if (isAccent && c.dot) {
+                // Only draw icon if the cell's layer is visible:
+                // precipitation icons (rain/drizzle/snow/hail) need their layer on;
+                // cloud/fog icons need their layer on; clear/partly/overcast always show.
+                const isPrecip = (fCell.type === 'rain' || fCell.type === 'drizzle' || fCell.type === 'snow' || fCell.type === 'hail');
+                const layerOk = isPrecip
+                    ? ((fCell.type === 'rain' || fCell.type === 'drizzle') && localMapLayers.rain) ||
+                      (fCell.type === 'snow' && localMapLayers.snow) ||
+                      (fCell.type === 'hail' && localMapLayers.hail)
+                    : (fCell.type === 'fog' ? localMapLayers.fog : true);
+                if (layerOk && fCell.icon) {
                     const px = jitPx(pt, pt.cell);
                     const py = jitPy(pt, pt.cell);
                     ctx.globalAlpha = 0.95;
-                    ctx.fillText(c.dot, px, py);
+                    ctx.fillText(fCell.icon, px, py);
                 }
             }
             ctx.globalAlpha = 1;
@@ -2935,13 +3346,32 @@
                 for (let i = 0; i < timeline.length; i += 1) {
                     const s = timeline[i];
                     const kind = kindOfSlot(s);
-                    const title = `${s.label} · ${kindLabel[kind]} · ☁️ ${cloudsOf(s)}%${s.precipMm > 0 ? ` · 💧 ${s.precipMm} mm` : ''}`;
-                    band += `<i data-idx="${i}" style="${segStyle(s)}" title="${title.replace(/"/g, '&quot;')}"></i>`;
+                    const mm = s.precipMm || 0;
+                    const prob = s.precipProb || 0;
+                    const wet = kind === 'rain' || kind === 'snow' || kind === 'hail';
+                    // Expected amount shown INSIDE each wet 15-minute block so you
+                    // see at a glance what each slot will bring: the mm value when
+                    // an amount is forecast, otherwise the % chance — and nothing
+                    // for dry clear/cloud slots. Text colour adapts per block so
+                    // it stays readable on the bright snow/hail and dark rain tiles.
+                    let amount = '';
+                    if (mm > 0) amount = fmtPrecipMm(mm);
+                    else if (prob >= LOCALMAP_PRECIP_PROB_PCT) amount = `${Math.round(prob)}%`;
+                    const title = `${s.label} · ${kindLabel[kind]} · ☁️ ${cloudsOf(s)}%${mm > 0 ? ` · 💧 ${mm} mm` : ''}${!mm && prob >= LOCALMAP_PRECIP_PROB_PCT ? ` · 🌧️ ${prob}% chance` : ''}`;
+                    let style = segStyle(s);
+                    if (amount) {
+                        const textColor = kind === 'snow'
+                            ? 'rgba(10, 25, 50, 0.95)'
+                            : 'rgba(255, 255, 255, 0.96)';
+                        const shadow = kind === 'snow' ? '' : 'text-shadow:0 1px 2px rgba(0,0,0,0.85);';
+                        style += `;color:${textColor};${shadow}`;
+                    }
+                    band += `<i data-idx="${i}" style="${style}" title="${title.replace(/"/g, '&quot;')}">${amount}</i>`;
                     // Icon only at the start of each precipitation episode.
-                    if ((kind === 'rain' || kind === 'snow' || kind === 'hail') && kind !== lastKind) {
+                    if (wet && kind !== lastKind) {
                         iconsHtml += `<em style="left:${pct(startMs + i * slotMs)}%" title="${title.replace(/"/g, '&quot;')}">${s.icon || kindIcon[kind]}</em>`;
                     }
-                    lastKind = (kind === 'rain' || kind === 'snow' || kind === 'hail') ? kind : '';
+                    lastKind = wet ? kind : '';
                 }
                 localMapTlForecast.innerHTML = band + iconsHtml;
                 highlightLocalMapFrame();
@@ -2992,14 +3422,17 @@
                 localMapTlScale.innerHTML = scaleHtml;
             }
 
-            if (localMapTlNow) localMapTlNow.style.left = `${nowPct}%`;
+            // The red ▶ needle tracks the forecast time on screen (frame 0 = real
+            // now; later frames = their clock time), not just the last data load.
+            positionLocalMapTimelineNeedle();
 
             if (arrivalIdx === -1) {
                 if (localMapTlStreak) { localMapTlStreak.style.left = '0%'; localMapTlStreak.style.width = '0%'; }
                 if (localMapTlArrival) localMapTlArrival.classList.remove('show');
                 if (localMapTlCaption) {
                     localMapTlCaption.className = 'localmap-tl-caption calm';
-                    localMapTlCaption.textContent = `😊 ${cloudStory} · no rain, snow or hail in the next 3 hours · 💧 ${fmtPrecipMm(totalPrecipMm)} mm total`;
+                    if (localMapTlSummary) localMapTlSummary.textContent = `😊 ${cloudStory} · no rain, snow or hail in the next 3 hours`;
+                    if (localMapTlPrecip) localMapTlPrecip.textContent = `💧 Expected rainfall: ${fmtPrecipMm(totalPrecipMm)} mm`;
                 }
                 return;
             }
@@ -3025,9 +3458,12 @@
                     ? ` · later ${precipEpisodes.slice(1).map((e) => `${kindIcon[e.kind]} ${timeline[e.start].label}`).join(', ')}`
                     : '';
                 localMapTlCaption.className = 'localmap-tl-caption';
-                localMapTlCaption.textContent = fallingNow
-                    ? `${slot.icon || '🌧️'} ${slot.condition || 'Precipitation'} — falling right now${laterEps} · 💧 ${fmtPrecipMm(totalPrecipMm)} mm total · ${cloudStory}`
-                    : `${slot.icon || '🌧️'} ${slot.condition || 'Precipitation'} first at ${slot.label} · ${fmtIn(minutesAway)}${laterEps} · 💧 ${fmtPrecipMm(totalPrecipMm)} mm total · ${cloudStory}`;
+                if (localMapTlSummary) {
+                    localMapTlSummary.textContent = fallingNow
+                        ? `${slot.icon || '🌧️'} ${slot.condition || 'Precipitation'} — falling right now${laterEps} · ${cloudStory}`
+                        : `${slot.icon || '🌧️'} ${slot.condition || 'Precipitation'} first at ${slot.label} · ${fmtIn(minutesAway)}${laterEps} · ${cloudStory}`;
+                }
+                if (localMapTlPrecip) localMapTlPrecip.textContent = `💧 Expected rainfall: ${fmtPrecipMm(totalPrecipMm)} mm`;
             }
         }
 
@@ -3048,25 +3484,21 @@
         let localMapPinchZoom = 1;
 
         function localMapRenderLoop(now) {
-            if (!latestLocalMapData || !localMapCanvas) { localMapRAF = 0; return; }
-            localMapRAF = requestAnimationFrame(localMapRenderLoop);
-            if (document.hidden) return;
-            const grid = latestLocalMapData.localMap;
-            const hasCells = grid && Array.isArray(grid.cells) && grid.cells.length > 0;
-            if (!hasCells) { localMapRAF = 0; return; }
-            if (now - lastLocalMapDraw < 50) return;   // ~20 fps: animate the falling particles
-            lastLocalMapDraw = now;
-            drawLocalMap(latestLocalMapData, now / 1000);
+            // MapLibre GL renders itself: one static push per data/frame change is
+            // enough (no 20 fps particle loop — the GL map has no canvas
+            // particles). Stop any loop the old canvas radar may have started.
+            localMapRAF = 0;
+            return;
         }
 
         function renderLocalMap(data) {
-            if (!localMapCanvas) return;
+            if (!localMapCanvas && !document.getElementById('localmap-map')) return;
             // Reset zoom & pan whenever NEW location data arrives (different
             // reference = fresh fetch from a location change), so the
             // "seen from above" map re-centres on the new area instead of
             // staying stuck at the previous location's zoom/pan offset.
             // The resize handler reuses latestLocalMapData, so we skip reset.
-            if (data !== latestLocalMapData) {
+            if (data !== latestLocalMapData && !(data && data.localMap && latestLocalMapData && latestLocalMapData.localMap && data.localMap === latestLocalMapData.localMap)) {
                 resetLocalMapZoom();
             }
             latestLocalMapData = data;
@@ -3077,13 +3509,21 @@
             if (localMapFrameTimeEl) localMapFrameTimeEl.textContent = localMapFrameLabel(localMapFrame);
             updateLocalMapMeta(data);
             updateLocalMapTimeline(data);
+            // ▶ The 3-hour prediction runs automatically: the moment the first
+            // forecast series has rendered, start the preview loop without the
+            // user having to press play. They can still pause/resume normally.
+            if (!localMapAutoPlayed && latestLocalMapFrameTimes && latestLocalMapFrameTimes.length > 1) {
+                localMapAutoPlayed = true;
+                startLocalMapPlayback();
+            }
+            refreshLocalMapIconGrid();
             if (data && data.localMap && Array.isArray(data.localMap.cells) && data.localMap.cells.length) {
-                fetchRainviewerFrames();   // fetch live radar frames (keyless, throttled internally)
             }
             const grid = data && data.localMap;
-            const hasCells = grid && Array.isArray(grid.cells) && grid.cells.length > 0;
             drawLocalMap(data, performance.now() / 1000);
-            if (hasCells && !localMapRAF) localMapRAF = requestAnimationFrame(localMapRenderLoop);
+            // MapLibre GL renders itself — no animation loop needed. Make sure
+            // any loop the old canvas radar started is stopped.
+            if (localMapRAF) { cancelAnimationFrame(localMapRAF); localMapRAF = 0; }
         }
 
         function handleLocalMapHover(e) {
@@ -3133,6 +3573,9 @@
         }
 
         // ===== 🗺️ Radar layer toggles: basemap + clouds / rain / snow / hail / wind.
+        // The MapLibre GL build below owns visibility (localMapGLApplyVis) — the
+        // toggle just flips the flag and re-pushes the same data object, which
+        // always refreshes layer visibility on the GL map.
         const localMapLayersEl = document.getElementById('localmap-layers');
         const localMapLayerBtns = {};
         if (localMapLayersEl) {
@@ -3143,13 +3586,13 @@
                     if (layer === 'topo') {
                         localMapBasemap = localMapBasemap === 'topo' ? 'osm' : 'topo';
                         localMapLayers.topo = localMapBasemap === 'topo';
-                        localMapTiles.clear();   // fetch the freshly-selected basemap tiles
                     } else {
                         localMapLayers[layer] = !localMapLayers[layer];
                     }
                     try { localStorage.setItem('localmap-layers', JSON.stringify(localMapLayers)); } catch (err) { /* private mode */ }
                     syncLocalMapLayerBtns();
                     if (latestLocalMapData) drawLocalMap(latestLocalMapData, performance.now() / 1000);
+                    else if (window.maplibregl) localMapGLApplyVis();
                 });
             });
         }
@@ -3160,10 +3603,10 @@
                 btn.classList.toggle('on', on);
                 btn.classList.toggle('off', !on);
                 if (layer === 'topo') {
-                    btn.textContent = on ? '🗺️ Terrain' : '🧭 Streets';
+                    btn.textContent = on ? '🎨 Colour' : '🌑 Dark';
                     btn.title = on
-                        ? 'Basemap: OpenTopoMap terrain (view from above). Tap to switch to the street map.'
-                        : 'Basemap: street map. Tap to switch to OpenTopoMap terrain.';
+                        ? 'Basemap: colourful vector map — razor-sharp at any zoom, free. Tap for the dark night-radar style.'
+                        : 'Basemap: dark vector night-radar — razor-sharp at any zoom, free. Tap for the colourful style.';
                 } else {
                     btn.title = on ? `Tap to hide the ${layer} layer` : `Tap to show the ${layer} layer`;
                 }
@@ -3276,12 +3719,23 @@
         if (localMapZoomOutBtn) localMapZoomOutBtn.addEventListener('click', () => applyLocalMapZoom(1 / 1.3));
         if (localMapZoomResetBtn) localMapZoomResetBtn.addEventListener('click', resetLocalMapZoom);
 
-        async function fetchWeather(location, resetSelectedDay = false) {
+        async function fetchWeather(location, resetSelectedDay = false, reportLocationError = false) {
             try {
                 const timestamp = Date.now();
                 const query = location ? `?location=${encodeURIComponent(location)}&_=${timestamp}` : `?_=${timestamp}`;
                 const res = await fetch(`/weather${query}`);
-                if (!res.ok) throw new Error('Failed to fetch');
+                if (!res.ok) {
+                    // The API answers 404 with { error } when the typed location
+                    // could not be found — surface that message to the user.
+                    let message = 'Failed to fetch weather data.';
+                    try {
+                        const errorBody = await res.json();
+                        if (errorBody && typeof errorBody.error === 'string' && errorBody.error) {
+                            message = errorBody.error;
+                        }
+                    } catch { /* keep the generic message */ }
+                    throw new Error(message);
+                }
                 const data = await res.json();
 
                 // Show which weather provider actually served this response —
@@ -3334,6 +3788,7 @@
                         <div>
                             <div class="weather-icon">${icon}</div>
                             <div class="current-temp">${temperature}°C</div>
+                            <div class="feels-line">🌡️ Feels like ${data.feelsLike ?? temperature}°C <small>· measured at 1.50 m</small></div>
                             <div class="location-line">
                                 <div class="location-tag">📍 ${displayLocation}</div>
                                 <div class="weather-chip">${condition}</div>
@@ -3345,6 +3800,10 @@
                     ${forecastHtml}
                     <div class="weather-summary">${prediction}</div>
                     <div class="stats-grid">
+                        <div class="stat-card">
+                            <span class="stat-label label-dual">Feels like<br><small>Gevoelstemp · 1.5 m</small></span>
+                            <span class="stat-value" id="stat-feels">${stats.feelsLike != null ? stats.feelsLike + '°C' : '—'}</span>
+                        </div>
                         <div class="stat-card">
                             <span class="stat-label label-dual">Humidity<br><small>Luchtvochtigheid</small></span>
                             <span class="stat-value" id="stat-humidity">${stats.humidity ?? '—'}%</span>
@@ -3376,6 +3835,13 @@
                 }
             } catch (e) {
                 weatherInfo.innerHTML = '<div style="color:#b42318;">Error loading weather data.</div>';
+                // Let location-not-found errors reach updateLocation() so the
+                // search box shows a clear message ("Location not found…").
+                // Only when the user asked for it — the 30-second auto-refresh
+                // must stay silent (the note is already visible on screen).
+                if (reportLocationError && e && typeof e.message === 'string' && /^Location not found/i.test(e.message)) {
+                    throw e;
+                }
             }
         }
 
@@ -3387,17 +3853,27 @@
                 manualBtn.textContent = 'Updating...';
             }
             try {
-                await fetchWeather(activeLocation, true);
+                await fetchWeather(activeLocation, true, true);
+                clearLocationNote();
             } catch (e) {
-                if (showLoading) {
-                    alert('Could not update weather for that location.');
-                }
+                const reason = e && typeof e.message === 'string' && e.message ? e.message : 'Could not update weather for that location.';
+                setLocationNote(`⚠️ ${reason} The globe and “seen from above” map keep showing the last good location.`);
             } finally {
                 if (showLoading) {
                     manualBtn.disabled = false;
                     manualBtn.textContent = 'Update location';
                 }
             }
+        }
+
+        // Inline feedback under the location search box (no blocking alert).
+        function setLocationNote(text) {
+            if (!locationNoteEl) return;
+            locationNoteEl.textContent = text;
+            locationNoteEl.className = 'location-note error';
+        }
+        function clearLocationNote() {
+            if (locationNoteEl) locationNoteEl.className = 'location-note';
         }
 
         // ===== Globe helpers: texture + math =====
@@ -5208,6 +5684,656 @@ async function sendTestPush() {
                 console.warn('Local notification failed', e);
             }
         }
+                // ===== 🛰️ MapLibre GL — the professional top-down local weather radar =====
+        // The old hand-drawn canvas radar is replaced by a real WebGL map: a free
+        // professional vector basemap (colourful or dark night-radar style), the
+        // Open-Meteo grid painted as crisp GeoJSON cells, Beaufort-coloured wind
+        // arrows, true-distance range rings, a scale bar and real place labels.
+        // Same layers & toggles as before: drawLocalMap / applyLocalMapZoom /
+        // resetLocalMapZoom are declared BELOW their canvas originals, so these
+        // implementations win and every existing call site keeps working.
+        const localMapGLEl = document.getElementById('localmap-map');
+        const localMapGLBadge = null;   // top-right forecast pill removed — the
+        // top-left "Live radar / Forecast +45 min" chip is the only one now.
+        let localMapGL = null;                    // maplibregl.Map
+        let localMapGLReady = false;
+        let localMapGLPendingData = null;         // data seen before the style 'load'
+        let localMapGLHome = { zoom: null, bounds: null };
+        let localMapGLIconMarkers = [];   // HTML emoji markers on the map
+        const localMapGLState = { dataRef: null, gridFrame: -1, ringsKey: '', placesKey: '' };
+        const localMapGLEmptyFC = { type: 'FeatureCollection', features: [] };
+
+        // Professional radar palette — vivid on the dark basemap, matching the
+        // legend chips: rich blue-grey clouds, lavender fog, pale-blue drizzle,
+        // deep blue→cyan rain by mm, icy-blue snow, vivid violet hail. Nothing
+        // paints near-white, so no "white blocks" can cover the map.
+        function localMapGLCellPaint(cls, cell) {
+            const mm = cell.precipitation || 0;
+            if (cls === 'hail') return 'rgba(163, 94, 255, 0.85)';
+            if (cls === 'snow') return 'rgba(150, 205, 255, 0.85)';
+            if (cls === 'rain') {
+                if (mm >= 10) return 'rgba(24, 90, 220, 0.85)';
+                if (mm >= 5) return 'rgba(30, 130, 245, 0.78)';
+                if (mm >= 2) return 'rgba(35, 165, 250, 0.68)';
+                return 'rgba(55, 185, 250, 0.58)';
+            }
+            if (cls === 'drizzle') return 'rgba(90, 160, 235, 0.38)';
+            if (cls === 'fog') return 'rgba(165, 170, 205, 0.42)';
+            if (cls === 'clouds') {
+                const cc = Math.min(100, cell.cloudCover || 0);
+                const a = (0.18 + (cc / 100) * 0.45).toFixed(3);
+                return `rgba(105, 135, 185, ${a})`;
+            }
+            return 'rgba(0, 0, 0, 0)';   // clear — invisible but hoverable
+        }
+
+        // ===== 🗺️ Vector basemap — stays razor-sharp at ANY zoom, free forever =====
+        // RASTER tiles (PNG images) always go blurry / pixelated when you zoom
+        // past their native zoom. VECTOR tiles instead send the raw geometry to
+        // the GPU and the map is re-drawn crisply on every frame — streets,
+        // parks, water and buildings stay perfectly sharp from world view down
+        // to street level, on any screen (including retina phones).
+        // OpenFreeMap (https://openfreemap.org) serves the full OpenMapTiles
+        // planet as vector tiles for FREE: no API key, no registration, no
+        // view limits, commercial use allowed. Two flavours ship with the app:
+        //   • Bright (colourful — green parks, blue water, warm roads) = default
+        //   • Dark (professional night-radar look) = the "Dark" toggle
+        // Attribution: OpenFreeMap © OpenMapTiles · Data from OpenStreetMap
+        const LOCALMAP_VECTOR_STYLES = {
+            topo: 'https://tiles.openfreemap.org/styles/bright',
+            osm: 'https://tiles.openfreemap.org/styles/dark'
+        };
+        let localMapGLStyleKind = null;   // which vector style is currently loaded
+        function localMapGLStyleUrl() {
+            return LOCALMAP_VECTOR_STYLES[localMapBasemap === 'topo' ? 'topo' : 'osm'];
+        }
+
+        function localMapGLStyle() {
+            // Kept for compatibility — the MapLibre map now boots straight from
+            // the free vector style URL; weather sources/layers are injected on
+            // 'load' / 'styledata' by localMapGLEnsureOverlays().
+            return localMapGLStyleUrl();
+        }
+
+        // Hide the basemap's own baked-in place/city labels so the app's OWN
+        // gold place pills stay the only city text on the radar (same promise
+        // the old no-labels raster tiles kept). Road names / shields are kept
+        // so the map stays readable when zoomed deep into streets.
+        function localMapGLHideBaseLabels() {
+            if (!localMapGL) return;
+            let ready = false;
+            try { ready = !!localMapGL.isStyleLoaded(); } catch (err) { ready = !!localMapGLReady; }
+            if (!ready) return;
+            let style;
+            try { style = localMapGL.getStyle(); } catch (err) { return; }
+            if (!style || !Array.isArray(style.layers)) return;
+            for (const l of style.layers) {
+                if (String(l.id || '').indexOf('lmc-') === 0) continue;  // ours — never hide
+                if (l.type !== 'symbol') continue;
+                const id = String(l.id || '').toLowerCase();
+                const src = String(l.source || '').toLowerCase();
+                if (id.indexOf('label_') === 0 || id.indexOf('place_') === 0 || id.indexOf('poi') !== -1 ||
+                    id.indexOf('airport') !== -1 || (src.indexOf('openmaptiles') !== -1 && (
+                        id.indexOf('place') !== -1 || id.indexOf('poi') !== -1 || id === 'label_other' ||
+                        id === 'label_village' || id === 'label_town' || id === 'label_city'))) {
+                    try { localMapGL.setLayoutProperty(l.id, 'visibility', 'none'); } catch (err) { /* race — next tick */ }
+                }
+            }
+        }
+
+        // First symbol layer of the basemap — weather goes UNDER it so map
+        // text stays readable, while our own topmost labels are added without
+        // a `before` so they stay above everything.
+        function localMapGLFirstSymbolId() {
+            try {
+                const layers = localMapGL.getStyle().layers || [];
+                for (const l of layers) {
+                    if (l.type === 'symbol' && String(l.id || '').indexOf('lmc-') !== 0) return l.id;
+                }
+            } catch (err) { /* style not ready yet */ }
+            return undefined;
+        }
+
+        // setStyle() wipes every custom source + layer, so (re-)create the
+        // weather sources if the freshly-loaded vector style lacks them.
+        function localMapGLEnsureSources() {
+            if (!localMapGL) return;
+            const defs = {
+                'lmc-grid': { type: 'geojson', data: localMapGLEmptyFC },
+                'lmc-wind': { type: 'geojson', data: localMapGLEmptyFC },
+                'lmc-rings': { type: 'geojson', data: localMapGLEmptyFC },
+                'lmc-places': { type: 'geojson', data: localMapGLEmptyFC },
+                'lmc-me': { type: 'geojson', data: localMapGLEmptyFC }
+            };
+            for (const [id, def] of Object.entries(defs)) {
+                if (!localMapGL.getSource(id)) {
+                    try { localMapGL.addSource(id, def); } catch (err) { /* duplicate race */ }
+                }
+            }
+        }
+
+        // The weather-grid fill layers are appended after the base layers so
+        // weather paints over radar, and radar over the basemap. Fills carry a
+        // thin outline so neighbouring forecast cells read as one continuous
+        // professional radar sheet instead of a patchwork of squares.
+        function localMapGLAddGridLayers() {
+            // Re-runs after every basemap switch (setStyle wipes layers), so
+            // every layer is added only if missing — weather first UNDER the
+            // basemap text, our own dots/labels topmost with no `before`.
+            localMapGLEnsureSources();
+            const before = localMapGLFirstSymbolId();
+            const addUnder = (def) => {
+                if (localMapGL.getLayer(def.id)) return;
+                try { localMapGL.addLayer(def, before); }
+                catch (err) { try { localMapGL.addLayer(def); } catch (err2) { /* race */ } }
+            };
+            const addTop = (def) => {
+                if (localMapGL.getLayer(def.id)) return;
+                try { localMapGL.addLayer(def); } catch (err) { /* race */ }
+            };
+            for (const cls of ['clear', 'clouds', 'fog', 'drizzle', 'rain', 'snow', 'hail']) {
+                addUnder({
+                    id: `lmc-fill-${cls}`, type: 'fill', source: 'lmc-grid',
+                    filter: ['==', ['get', 'cls'], cls],
+                    paint: { 'fill-color': ['get', 'fill'], 'fill-opacity': ['get', 'op'] }
+                });
+            }
+            // No grid lines, no MapLibre symbol layer — emoji are rendered as
+            // HTML markers (see localMapGLBuildIcons) so they always show in full
+            // colour regardless of the GPU font/glyph pipeline.
+            addTop({
+                id: 'lmc-hover', type: 'line', source: 'lmc-grid',
+                filter: ['==', ['get', 'i'], -1],
+                layout: { 'line-join': 'round' },
+                paint: { 'line-color': 'rgba(255, 255, 255, 0.9)', 'line-width': 1.6 }
+            });
+            addUnder({
+                id: 'lmc-wind', type: 'line', source: 'lmc-wind',
+                layout: { 'line-cap': 'round', 'line-join': 'round' },
+                paint: { 'line-color': ['get', 'color'], 'line-width': ['get', 'w'] }
+            });
+            addTop({
+                id: 'lmc-wind-labels', type: 'symbol', source: 'lmc-wind',
+                filter: ['has', 'label'],
+                layout: { 'text-field': ['get', 'label'], 'text-font': ['Noto Sans Bold'], 'text-size': 10, 'text-allow-overlap': true },
+                paint: { 'text-color': '#fff3df', 'text-halo-color': 'rgba(8, 20, 40, 0.9)', 'text-halo-width': 1.4 }
+            });
+            addTop({
+                id: 'lmc-places-dots', type: 'circle', source: 'lmc-places',
+                paint: { 'circle-radius': 2.4, 'circle-color': 'rgba(255, 214, 110, 0.95)', 'circle-stroke-width': 1.2, 'circle-stroke-color': 'rgba(10, 22, 42, 0.85)' }
+            });
+            addTop({
+                id: 'lmc-places-labels', type: 'symbol', source: 'lmc-places',
+                layout: {
+                    'text-field': ['get', 'name'], 'text-font': ['Noto Sans Bold'],
+                    'text-size': ['interpolate', ['linear'], ['zoom'], 8, 10, 11, 11.5, 13, 13],
+                    'text-offset': [0, 0.9], 'text-anchor': 'top',
+                    'text-allow-overlap': false, 'text-ignore-placement': false,
+                    'text-padding': 6
+                },
+                paint: { 'text-color': '#f2f8ff', 'text-halo-color': 'rgba(6, 16, 32, 0.95)', 'text-halo-width': 1.6 }
+            });
+            addTop({
+                id: 'lmc-me-glow', type: 'circle', source: 'lmc-me',
+                paint: { 'circle-radius': 14, 'circle-color': 'rgba(255, 77, 94, 0.3)', 'circle-blur': 1 }
+            });
+            addTop({
+                id: 'lmc-me-ring', type: 'circle', source: 'lmc-me',
+                paint: { 'circle-radius': 8, 'circle-color': 'rgba(255, 77, 94, 0)', 'circle-stroke-width': 2, 'circle-stroke-color': 'rgba(255, 255, 255, 0.9)' }
+            });
+            addTop({
+                id: 'lmc-me-core', type: 'circle', source: 'lmc-me',
+                paint: { 'circle-radius': 5, 'circle-color': 'rgba(255, 80, 80, 0.95)' }
+            });
+            // Rings live under the weather cells.
+            addUnder({
+                id: 'lmc-rings', type: 'line', source: 'lmc-rings',
+                filter: ['==', ['get', 'kind'], 'ring'],
+                layout: { 'line-cap': 'round', 'line-join': 'round' },
+                paint: { 'line-color': 'rgba(148, 190, 235, 0.42)', 'line-width': 1.2, 'line-dasharray': [2, 3] }
+            });
+            addTop({
+                id: 'lmc-ring-labels', type: 'symbol', source: 'lmc-rings',
+                filter: ['==', ['get', 'kind'], 'label'],
+                layout: { 'text-field': ['get', 'text'], 'text-font': ['Noto Sans Regular'], 'text-size': 9.5, 'text-allow-overlap': true },
+                paint: { 'text-color': 'rgba(190, 216, 244, 0.8)', 'text-halo-color': 'rgba(5, 13, 28, 0.9)', 'text-halo-width': 1.2 }
+            });
+            localMapGLHideBaseLabels();
+            localMapGLApplyVis();
+        }
+
+        function localMapGLInit() {
+            if (!localMapGLEl || localMapGL) return;
+            if (!window.maplibregl) {
+                if (localMapLoading) {
+                    localMapLoading.classList.remove('hidden');
+                    localMapLoading.textContent = '🛰️ The map engine (MapLibre GL) failed to load — check the internet connection.';
+                }
+                return;
+            }
+            localMapGLStyleKind = localMapBasemap === 'topo' ? 'topo' : 'osm';
+            localMapGL = new maplibregl.Map({
+                container: localMapGLEl,
+                style: localMapGLStyleUrl(),
+                center: [5.3, 52.2],
+                zoom: 8,
+                minZoom: 4,
+                maxZoom: 16,
+                attributionControl: { compact: true },
+                dragRotate: false,
+                pitchWithRotate: false,
+                touchPitch: false,
+                maxPitch: 0,          // a true straight-down (nadir) radar view
+                fadeDuration: 0
+            });
+            localMapGL.addControl(new maplibregl.ScaleControl({ maxWidth: 90, unit: 'metric' }), 'bottom-left');
+            if (maplibregl.NavigationControl) localMapGL.addControl(new maplibregl.NavigationControl({ showCompass: false, visualizePitch: false }), 'top-right');
+            localMapGL.on('load', () => {
+                localMapGLReady = true;
+                localMapGLAddGridLayers();
+                try { localMapGL.resize(); } catch (err) { /* canvas not laid out yet */ }
+                if (localMapLoading) localMapLoading.classList.add('hidden');
+                const d = localMapGLPendingData || latestLocalMapData;
+                localMapGLPendingData = null;
+                if (d) drawLocalMap(d, performance.now() / 1000);
+            });
+            // setStyle() fires styledata — re-inject the wiped weather layers,
+            // re-apply tile URLs + weather data on the next drawLocalMap frame.
+            localMapGL.on('styledata', () => {
+                if (!localMapGLReady) return;
+                try {
+                    if (!localMapGL.getLayer('lmc-fill-rain')) {
+                        localMapGLAddGridLayers();
+                        const d = localMapGLPendingData || latestLocalMapData;
+                        localMapGLPendingData = null;
+                        if (d) drawLocalMap(d, performance.now() / 1000);
+                    } else localMapGLHideBaseLabels();
+                } catch (err) { /* style mid-swap — next event */ }
+            });
+            localMapGL.on('zoom', localMapGLSyncZoomLabel);
+            localMapGL.on('move', localMapGLRepositionIcons);
+            localMapGL.on('mousemove', localMapGLHover);
+            localMapGL.on('mouseout', () => {
+                localMapGL.getCanvas().style.cursor = '';
+                if (localMapCellInfo) localMapCellInfo.textContent = '';
+                localMapGLSetHoverFilter(null);
+            });
+            localMapGL.on('error', (e) => {
+                // Tile hiccups (slow CDN, phone offline) are normal and recover on
+                // their own — only surface style-level failures while loading.
+                if (e && e.error && e.error.status && localMapLoading && !localMapGLReady) {
+                    localMapLoading.classList.remove('hidden');
+                    localMapLoading.textContent = '🛰️ The map style failed to load — weather layers still work.';
+                }
+            });
+        }
+
+        function localMapGLSyncZoomLabel() {
+            if (!localMapGL || localMapGLHome.zoom == null) return;
+            localMapZoom = Math.max(0.1, Math.pow(2, localMapGL.getZoom() - localMapGLHome.zoom));
+            updateLocalMapZoomLabel();
+        }
+
+        function localMapGLSetHoverFilter(expr) {
+            if (!localMapGLReady) return;
+            if (!localMapGL.getLayer('lmc-hover')) return;
+            localMapGL.setFilter('lmc-hover', expr || ['==', ['get', 'i'], -1]);
+        }
+
+        function localMapGLHover(e) {
+            if (!localMapGLReady || !localMapCellInfo) return;
+            const feats = localMapGL.queryRenderedFeatures(e.point, {
+                layers: ['lmc-fill-clear', 'lmc-fill-clouds', 'lmc-fill-fog', 'lmc-fill-drizzle', 'lmc-fill-rain', 'lmc-fill-snow', 'lmc-fill-hail']
+            });
+            if (feats.length) {
+                const f = feats[0];
+                const suffix = localMapFrame ? ` · ${localMapFrameLabel(localMapFrame)}` : '';
+                localMapCellInfo.textContent = (f.properties.tip || '') + suffix;
+                localMapGL.getCanvas().style.cursor = 'crosshair';
+                localMapGLSetHoverFilter(['==', ['get', 'i'], f.properties.i]);
+            } else {
+                localMapCellInfo.textContent = '';
+                localMapGL.getCanvas().style.cursor = '';
+                localMapGLSetHoverFilter(null);
+            }
+        }
+
+        // Grid spacing: the modal gap between the unique grid longitudes /
+        // latitudes (the API returns a regular 5×5 lattice around the location).
+        function localMapGLGridSpacing(cells) {
+            const uniq = (vals) => [...new Set(vals.map((v) => Math.round(v * 1000) / 1000))].sort((a, b) => a - b);
+            const gap = (vals, fallback) => {
+                let best = 0;
+                for (let i = 1; i < vals.length; i += 1) {
+                    const d = vals[i] - vals[i - 1];
+                    if (d > 0.002 && (d < best || best === 0)) best = d;
+                }
+                return best || fallback;
+            };
+            return {
+                dLon: gap(uniq(cells.map((c) => c.lon)), 0.08),
+                dLat: gap(uniq(cells.map((c) => c.lat)), 0.05)
+            };
+        }
+
+        function localMapGLCellTip(cell) {
+            const windKmh = cell.wind_speed || 0;
+            const windText = windKmh > 0 ? ` · 💨 ${windKmh} km/h (Bf ${localMapBeaufort(windKmh)})` : '';
+            return `${cell.icon || ''} ${cell.condition || ''} · ${cell.temp}°C · 💧 ${cell.precipitation} mm · ☁️ ${cell.cloudCover}%${windText}`;
+        }
+
+        function localMapGLBuildGrid(data, cells) {
+            const { dLon, dLat } = localMapGLGridSpacing(cells);
+            const hx = dLon * 0.56, hy = dLat * 0.56;
+            const features = [];
+            cells.forEach((raw, i) => {
+                const cell = localMapFrameCell(raw, localMapFrame);
+                const cls = cell.type || 'clear';
+                features.push({
+                    type: 'Feature',
+                    id: i + 1,
+                    properties: {
+                        i,
+                        cls,
+                        fill: localMapGLCellPaint(cls, cell),
+                        op: 0,
+                        tip: localMapGLCellTip(cell),
+                        icon: cell.icon || LOCALMAP_ICON_OTHER
+                    },
+                    geometry: {
+                        type: 'Polygon',
+                        coordinates: [[
+                            [cell.lon - hx, cell.lat - hy],
+                            [cell.lon + hx, cell.lat - hy],
+                            [cell.lon + hx, cell.lat + hy],
+                            [cell.lon - hx, cell.lat + hy],
+                            [cell.lon - hx, cell.lat - hy]
+                        ]]
+                    }
+                });
+            });
+            localMapGL.getSource('lmc-grid').setData({ type: 'FeatureCollection', features });
+            localMapGLState.gridFrame = localMapFrame;
+        }
+
+        // ☀️⛅☁️🌧️ Weather icons as HTML markers — GPU symbol layers can't reliably
+        // render colour emoji, so each grid cell gets a real <div> positioned with
+        // MapLibre's projector. Rebuilt on every data/frame change; repositioned on
+        // every map move/zoom. Scales with zoom for visual consistency.
+        function localMapGLBuildIcons(cells) {
+            if (!localMapGL || !localMapGLEl) return;
+            // Remove old markers (and stop the previous drift loop)
+            if (localMapGLIconDriftRAF) { cancelAnimationFrame(localMapGLIconDriftRAF); localMapGLIconDriftRAF = 0; }
+            for (const m of localMapGLIconMarkers) { try { m.el.remove(); } catch (e) { /* gone */ } }
+            localMapGLIconMarkers = [];
+            if (!cells || !cells.length) return;
+            const zoom = localMapGL.getZoom();
+            // Scale: 40px at z8 → 64px at z13, capped to a comfortable range
+            const size = Math.min(96, Math.max(40, 40 + (zoom - 8) * 4.8));
+            const fontSize = Math.round(size * 0.75);
+            const haloBlur = Math.max(2, Math.round(size * 0.1));
+            const sp = localMapGLGridSpacing(cells);
+            const wrapLon = Math.max(sp.dLon, 0.004) * 0.5;   // ± half a cell
+            const wrapLat = Math.max(sp.dLat, 0.004) * 0.5;
+            for (const raw of cells) {
+                const cell = localMapFrameCell(raw, localMapFrame);
+                const el = document.createElement('div');
+                el.className = 'lmc-icon-marker';
+                el.textContent = cell.icon || LOCALMAP_ICON_OTHER;
+                el.style.cssText = `position:absolute;width:${size}px;height:${size}px;font-size:${fontSize}px;line-height:${size}px;text-align:center;pointer-events:none;z-index:50;transform:translate(-50%,-50%);text-shadow:0 0 ${haloBlur}px rgba(8,18,38,0.7);`;
+                localMapGLEl.appendChild(el);
+                // Keep this cell's live wind so the icon can flow with it
+                const fromDeg = typeof cell.wind_direction === 'number' && Number.isFinite(cell.wind_direction) ? cell.wind_direction : 0;
+                const windKmh = Math.max(0, Number(cell.wind_speed) || 0);
+                localMapGLIconMarkers.push({
+                    el, lon: cell.lon, lat: cell.lat, size, fontSize, haloBlur,
+                    windDirRad: ((fromDeg + 180) % 360) * Math.PI / 180,
+                    windKmh,
+                    wrapLon, wrapLat,
+                    phase: Math.abs(cell.lat * 0.731 + cell.lon * 0.159)
+                });
+            }
+            localMapGLRepositionIcons();
+            localMapGLIconDriftRAF = requestAnimationFrame(localMapGLIconDriftLoop);
+        }
+
+        // 🌬️ Drift clock: every on-map icon flows with its cell's live wind
+        // (direction where the wind blows TOWARD, speed ∝ km/h), wrapped inside
+        // ±half of its cell so the icon stays tied to its sky patch while
+        // visibly streaming across the map.
+        let localMapGLIconDriftRAF = 0;
+        function localMapGLIconDriftLoop() {
+            if (!localMapGLIconMarkers.length) { localMapGLIconDriftRAF = 0; return; }
+            localMapGLRepositionIcons();
+            localMapGLIconDriftRAF = requestAnimationFrame(localMapGLIconDriftLoop);
+        }
+
+        function localMapGLRepositionIcons() {
+            if (!localMapGL || !localMapGLIconMarkers.length) return;
+            const zoom = localMapGL.getZoom();
+            const size = Math.min(96, Math.max(40, 40 + (zoom - 8) * 4.8));
+            const fontSize = Math.round(size * 0.75);
+            const haloBlur = Math.max(2, Math.round(size * 0.1));
+            const t = performance.now() / 1000;
+            for (const m of localMapGLIconMarkers) {
+                try {
+                    m.el.style.width = size + 'px';
+                    m.el.style.height = size + 'px';
+                    m.el.style.fontSize = fontSize + 'px';
+                    m.el.style.lineHeight = size + 'px';
+                    m.el.style.textShadow = `0 0 ${haloBlur}px rgba(8,18,38,0.7)`;
+                    const p0 = localMapGL.project([m.lon, m.lat]);
+                    // Per-pixel wind speed (feels the same at every zoom), then
+                    // wrap the offset inside ±half a cell and add a gentle swing.
+                    const speedPx = Math.max(3, 10 + m.windKmh * 0.42);
+                    const px = localMapGL.project([m.lon + m.wrapLon, m.lat]);
+                    const py = localMapGL.project([m.lon, m.lat + m.wrapLat]);
+                    const cellPxX = Math.max(14, Math.abs(px.x - p0.x));
+                    const cellPxY = Math.max(14, Math.abs(py.y - p0.y));
+                    const ox = wrapMod2(Math.sin(m.windDirRad) * speedPx * t, 2 * cellPxX) - cellPxX + Math.sin(t * 0.6 + m.phase) * cellPxX * 0.16;
+                    const oy = wrapMod2(-Math.cos(m.windDirRad) * speedPx * t, 2 * cellPxY) - cellPxY + Math.cos(t * 0.8 + m.phase * 0.9) * cellPxY * 0.16;
+                    m.el.style.left = (p0.x + ox) + 'px';
+                    m.el.style.top = (p0.y + oy) + 'px';
+                } catch (e) { /* out of bounds */ }
+            }
+        }
+
+        // 💨 Wind arrows point where the wind blows TO ("from" direction + 180°),
+        // coloured by Beaufort force; cells at Beaufort 5+ (the alert threshold)
+        // get a km/h label, like the canvas radar did.
+        function localMapGLBuildWind(cells, dLon, dLat, centerLat) {
+            const lenDeg = Math.max(dLon, dLat) * 0.62;
+            const cosLat = Math.max(0.2, Math.cos((centerLat || 0) * Math.PI / 180));
+            const features = [];
+            for (const raw of cells) {
+                const cell = localMapFrameCell(raw, localMapFrame);
+                const ws = cell.wind_speed || 0;
+                if (ws < 3) continue;   // calm air — no arrow
+                const toward = (((cell.wind_direction || 0) + 180) % 360) * Math.PI / 180;
+                const dx = Math.sin(toward) * lenDeg;
+                const dy = Math.cos(toward) * lenDeg * cosLat;   // lon/lat scale fix
+                const bft = localMapBeaufort(ws);
+                const cx = cell.lon, cy = cell.lat;
+                const tx = cx + dx, ty = cy + dy;                // arrow tip
+                const back = Math.atan2(-dy, -dx);
+                const head = Math.max(lenDeg * 0.28, 0.004);
+                features.push({
+                    type: 'Feature',
+                    properties: {
+                        color: localMapWindColor(bft),
+                        w: bft >= 5 ? 2.4 : 1.7,
+                        label: bft >= 5 ? `${ws} km/h` : null
+                    },
+                    geometry: {
+                        type: 'MultiLineString',
+                        coordinates: [
+                            [[cx - dx, cy - dy], [tx, ty]],
+                            [[tx, ty], [tx + Math.cos(back + 0.5) * head, ty + Math.sin(back + 0.5) * head]],
+                            [[tx, ty], [tx + Math.cos(back - 0.5) * head, ty + Math.sin(back - 0.5) * head]]
+                        ]
+                    }
+                });
+            }
+            localMapGL.getSource('lmc-wind').setData({ type: 'FeatureCollection', features });
+        }
+
+        // True-distance range rings around "you are here" — the look of a real
+        // straight-down radar. Rings every 5 km up to 30 km, each labelled.
+        function localMapGLBuildRings(lat, lon) {
+            // Rings removed — user wants a clean map with only weather icons.
+            localMapGL.getSource('lmc-rings').setData({ type: 'FeatureCollection', features: [] });
+            localMapGL.getSource('lmc-me').setData({
+                type: 'FeatureCollection',
+                features: [{ type: 'Feature', properties: {}, geometry: { type: 'Point', coordinates: [lon, lat] } }]
+            });
+        }
+
+        function localMapGLBuildPlaces(places) {
+            const features = (places || []).filter((p) => p && p.name && typeof p.lat === 'number' && typeof p.lon === 'number')
+                .map((p) => ({
+                    type: 'Feature',
+                    properties: { name: p.name },
+                    geometry: { type: 'Point', coordinates: [p.lon, p.lat] }
+                }));
+            localMapGL.getSource('lmc-places').setData({ type: 'FeatureCollection', features });
+        }
+
+        // Centre the map on the weather grid — the same ~70 km window the old
+        // radar framed — and remember that home view for the ⟳ reset button.
+        // Margin is a small frame (~12% of a cell), not a full cell: the old
+        // canvas radar spanned just the grid lattice itself.
+        function localMapGLGoHome(cells) {
+            const { dLon, dLat } = localMapGLGridSpacing(cells);
+            const mx = dLon * 0.12, my = dLat * 0.12;
+            let minLon = 180, maxLon = -180, minLat = 90, maxLat = -90;
+            for (const c of cells) {
+                if (c.lon < minLon) minLon = c.lon;
+                if (c.lon > maxLon) maxLon = c.lon;
+                if (c.lat < minLat) minLat = c.lat;
+                if (c.lat > maxLat) maxLat = c.lat;
+            }
+            const bounds = new maplibregl.LngLatBounds(
+                [minLon - mx, minLat - my],
+                [maxLon + mx, maxLat + my]
+            );
+            localMapGLHome.bounds = bounds;
+            const cam = localMapGL.cameraForBounds(bounds, { padding: 24, maxZoom: 11.5 });
+            if (cam) localMapGLHome.zoom = cam.zoom;
+            localMapGL.fitBounds(bounds, { padding: 24, duration: 800, maxZoom: 11.5, essential: true });
+        }
+
+        function localMapGLApplyVis() {
+            if (!localMapGL || !localMapGLReady) return;
+            // The basemap is the loaded vector style itself (bright = colourful
+            // default, dark = night-radar) — switch styles when the toggle state
+            // changed. setStyle() wipes our layers; 'styledata' re-adds them.
+            const want = localMapBasemap === 'topo' ? 'topo' : 'osm';
+            if (want !== localMapGLStyleKind) {
+                localMapGLStyleKind = want;
+                try { localMapGL.setStyle(localMapGLStyleUrl()); } catch (err) { /* next tick */ }
+                return;
+            }
+            if (!localMapGL.getLayer('lmc-fill-rain')) return;
+            const vis = (id, on) => localMapGL.setLayoutProperty(id, 'visibility', on ? 'visible' : 'none');
+            vis('lmc-fill-clouds', !!localMapLayers.clouds);
+            vis('lmc-fill-fog', !!localMapLayers.fog);
+            vis('lmc-fill-drizzle', !!localMapLayers.rain);
+            vis('lmc-fill-rain', !!localMapLayers.rain);
+            vis('lmc-fill-snow', !!localMapLayers.snow);
+            vis('lmc-fill-hail', !!localMapLayers.hail);
+            if (localMapGL.getLayer('lmc-grid-lines')) vis('lmc-grid-lines', !!(localMapLayers.clouds || localMapLayers.fog || localMapLayers.rain || localMapLayers.snow || localMapLayers.hail));
+            vis('lmc-wind', !!localMapLayers.wind);
+            vis('lmc-wind-labels', !!localMapLayers.wind);
+            // Keep the corner chip honest: "Live" on frame 0, the forecast
+            // offset (+15 min … +3 h) while a prediction frame is on screen.
+            var liveText = document.getElementById('localmap-live-text');
+            if (liveText) liveText.textContent = localMapFrame > 0 ? ('Forecast ' + localMapFrameLabel(localMapFrame)) : 'Live';
+        }
+
+        // ===== 🛰️ The new drawLocalMap: pushes everything into MapLibre =====
+        // Declared AFTER the canvas original, so this implementation wins.
+        function drawLocalMap(data, tNow) {
+            if (!localMapGLEl) return;
+            if (!localMapGL) localMapGLInit();
+            if (!localMapGL) return;   // CDN failed — the loading note explains
+            const grid = data && data.localMap;
+            const cells = grid && Array.isArray(grid.cells) ? grid.cells : [];
+            if (!localMapGLReady) { localMapGLPendingData = data; return; }
+            const dataChanged = data !== localMapGLState.dataRef;
+            const frameChanged = localMapFrame !== localMapGLState.gridFrame;
+            if (dataChanged) {
+                localMapGLState.dataRef = data;
+                localMapGLState.gridFrame = -1;      // force a grid rebuild
+            }
+            if (cells.length && localMapLoading) localMapLoading.classList.add('hidden');
+            if (!cells.length && localMapLoading && localMapLoading.textContent.indexOf('grid') === -1) {
+                localMapLoading.classList.remove('hidden');
+                localMapLoading.textContent = 'No weather grid around this location (open water?) — basemap only.';
+            }
+            if (dataChanged && cells.length) {
+                localMapGLGoHome(cells);
+                const cl = cells[0];
+                const lat = typeof data.latitude === 'number' ? data.latitude : cl.lat;
+                const lon = typeof data.longitude === 'number' ? data.longitude : cl.lon;
+                localMapGLBuildRings(lat, lon);
+            }
+            const placesKey = data && Array.isArray(data.nearbyPlaces)
+                ? data.nearbyPlaces.map((p) => p && p.name).join('|') : '';
+            if (placesKey !== localMapGLState.placesKey) {
+                localMapGLState.placesKey = placesKey;
+                localMapGLBuildPlaces(data ? data.nearbyPlaces : []);
+            }
+            if (dataChanged || frameChanged) localMapGLBuildGrid(data, cells);
+            if (cells.length) localMapGLBuildIcons(cells);
+            if (dataChanged || frameChanged) {
+                const sp = cells.length ? localMapGLGridSpacing(cells) : { dLon: 0.08, dLat: 0.05 };
+                const centerLat = typeof data.latitude === 'number' ? data.latitude : (cells[0] ? cells[0].lat : 0);
+                localMapGLBuildWind(cells, sp.dLon, sp.dLat, centerLat);
+            }
+            // Visibility is refreshed on EVERY push (including layer toggles,
+            // which re-push the same data object with no data/frame change).
+            // (The top-left "Live radar / Forecast …" chip already carries the
+            // forecast time — the old top-right duplicate pill is gone.)
+            if (localMapGLReady) localMapGLApplyVis();
+            localMapGLSyncZoomLabel();
+        }
+
+        // Zoom buttons (+ / − / ⟳) now drive the GL camera. Declared after the
+        // canvas originals, so the existing click listeners call these instead.
+        function applyLocalMapZoom(factor) {
+            if (!localMapGL || !localMapGLReady) return;
+            const z = localMapGL.getZoom() + Math.log2(factor || 1.3);
+            localMapGL.easeTo({ zoom: Math.max(localMapGL.getMinZoom(), Math.min(localMapGL.getMaxZoom(), z)), duration: 280 });
+        }
+
+        function resetLocalMapZoom() {
+            if (!localMapGL || !localMapGLReady || !localMapGLHome.bounds) {
+                localMapZoom = 1;
+                updateLocalMapZoomLabel();
+                return;
+            }
+            localMapGL.fitBounds(localMapGLHome.bounds, { padding: 30, duration: 500, maxZoom: 11.5 });
+        }
+
+
+        // ===== MapLibre async-library boot (CDN fallback support) ============
+        // The head loader injects MapLibre asynchronously (unpkg → jsDelivr) and
+        // dispatches maplibreready / maplibrefailed on <document>. If data has
+        // already arrived (fast API, slow CDN), drawLocalMap bailed out early —
+        // this listener boots the map and replays the pending snapshot the
+        // instant the library lands.
+        document.addEventListener('maplibreready', () => {
+            if (!localMapGLEl || localMapGL) return;
+            localMapGLInit();
+            if (localMapGL && latestLocalMapData) drawLocalMap(latestLocalMapData, performance.now() / 1000);
+        });
+        document.addEventListener('maplibrefailed', () => {
+            if (localMapLoading) {
+                localMapLoading.classList.remove('hidden');
+                localMapLoading.textContent = '🛰️ The map engine (MapLibre GL) failed to load from both CDNs — check the internet connection.';
+            }
+        });
+
 
         // Always start at the phone's location — the globe marker, the weather and the
         // push-alert coordinates all follow wherever the user is. If GPS / network

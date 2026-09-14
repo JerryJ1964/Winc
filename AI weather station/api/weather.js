@@ -199,7 +199,8 @@ function buildWapiTimeline(forecastDays, localNow) {
     if (!entry) break;
     const hour = entry.hour;
     const wmo = mapWapiCodeToWmo(hour.condition?.code ?? 1000);
-    const mapped = mapWeatherCodeToCondition(wmo);
+    const slotTemp = Math.round(lerp(hour.temp_c ?? 0, next?.hour.temp_c ?? 0));
+    const mapped = honestSnowCondition(wmo, slotTemp) || mapWeatherCodeToCondition(wmo);
     // WeatherAPI only provides hourly steps, but the UI (sky strip, red
     // arrival streak) expects smooth 15-minute values — linearly interpolate
     // between this hour and the next instead of repeating flat quarters.
@@ -217,7 +218,8 @@ function buildWapiTimeline(forecastDays, localNow) {
       icon: mapped.icon,
       weatherCode: wmo,
       cloudCover,
-      temperature: Math.round(lerp(hour.temp_c ?? 0, next?.hour.temp_c ?? 0)),
+      temperature: slotTemp,
+      feelsLike: Math.round(lerp(hour.feelslike_c ?? hour.temp_c ?? 0, next?.hour.feelslike_c ?? next?.hour.temp_c ?? 0)),
       precipMm: Math.round((lerp(hour.precip_mm ?? 0, next?.hour.precip_mm ?? 0) / 4) * 10) / 10,
       precipProb: Math.round(Math.max(
         lerp(hour.chance_of_rain ?? 0, next?.hour.chance_of_rain ?? 0),
@@ -256,13 +258,17 @@ function buildForecast(data) {
   const codes = data.daily?.weathercode ?? [];
   const highs = data.daily?.temperature_2m_max ?? [];
   const lows = data.daily?.temperature_2m_min ?? [];
+  const feelsHighs = data.daily?.apparent_temperature_max ?? [];
+  const feelsLows = data.daily?.apparent_temperature_min ?? [];
   const windMax = data.daily?.wind_speed_10m_max ?? [];
   const windDir = data.daily?.wind_direction_10m_dominant ?? [];
   const humidityMax = data.daily?.relative_humidity_2m_max ?? [];
   const humidityMin = data.daily?.relative_humidity_2m_min ?? [];
 
   return dates.slice(0, 3).map((date, index) => {
-    const mapped = mapWeatherCodeToCondition(codes[index] ?? 0);
+    // A snowy code on a day whose HIGH is too warm for snow reads as rain
+    // (honestSnowCondition) — the icon then matches the forecast temperature.
+    const mapped = honestSnowCondition(codes[index] ?? 0, highs[index]) || mapWeatherCodeToCondition(codes[index] ?? 0);
     const maxHum = humidityMax[index];
     const minHum = humidityMin[index];
     const humidity = maxHum != null && minHum != null
@@ -278,6 +284,8 @@ function buildForecast(data) {
       weatherCode: codes[index] ?? 0,
       high: highs[index] !== undefined ? Math.round(highs[index]) : null,
       low: lows[index] !== undefined ? Math.round(lows[index]) : null,
+      feelsHigh: feelsHighs[index] !== undefined ? Math.round(feelsHighs[index]) : null,
+      feelsLow: feelsLows[index] !== undefined ? Math.round(feelsLows[index]) : null,
       humidity,
       windSpeed,
       windDirection,
@@ -295,6 +303,19 @@ const STRONG_WIND_ABOVE_BEAUFORT = 4; // user requested alerts for wind *above* 
 const STRONG_WIND_ALERT_KMH = 29;  // ≥ 29 km/h  =>  wind force above Beaufort 4 (Bf 5 starts at 29)  
 const SNOW_CODES = new Set([71, 73, 75, 77, 85, 86]); // freezing snow/sleet fall types
 const HAIL_CODES = new Set([96, 99]);                 // hail-bearing thunderstorms
+
+// Snow honesty: snow cannot fall when the air is well above freezing. A snowy
+// WMO code at warmer temperatures is a model quirk — those conditions are
+// reported as rain so every icon matches its temperature. Wet snow at 0…2 °C
+// (SNOW_TOO_WARM_C) is real and keeps its snow icon. Used for the current
+// weather, the 3-day forecast, the nowcast slots and the 🛰️ local-map cells;
+// the front end applies the same rule (SNOW_TOO_WARM_C in index.html).
+const SNOW_TOO_WARM_C = 2;
+function honestSnowCondition(code, tempC) {
+  if (typeof tempC !== 'number' || tempC <= SNOW_TOO_WARM_C) return null;
+  if (!SNOW_CODES.has(code)) return null;
+  return { condition: 'Rain', icon: '🌧️' };
+}
 
 // Build a machine-readable list of active weather alerts for the next 3 hours.
 // `timeline` is the array of 15-minute slots from buildNowcast().
@@ -401,7 +422,8 @@ function buildNowcast(data) {
   const slices = m15.time.slice(0, NOWCAST_SLOTS);
   const timeline = slices.map((time, i) => {
     const code = m15.weather_code?.[i] ?? 0;
-    const mapped = mapWeatherCodeToCondition(code);
+    const slotTemp = Math.round(m15.temperature_2m?.[i] ?? 0);
+    const mapped = honestSnowCondition(code, slotTemp) || mapWeatherCodeToCondition(code);
     const precipMmRaw = m15.precipitation?.[i] ?? 0;
     // SUN % (shown with the sun icon in the 15-minute slots): how much the sun
     // is actually shining. Clear sky (sun fully visible) -> 100%, clouds block
@@ -428,7 +450,8 @@ function buildNowcast(data) {
       icon: mapped.icon,
       weatherCode: code,
       cloudCover: Math.round(cloudCover ?? 0),
-      temperature: Math.round(m15.temperature_2m?.[i] ?? 0),
+      temperature: slotTemp,
+      feelsLike: Math.round(m15.apparent_temperature?.[i] ?? m15.temperature_2m?.[i] ?? 0),
       precipMm: Math.round(precipMmRaw * 10) / 10,
       precipProb: Math.round(m15.precipitation_probability?.[i] ?? 0),
       windKmh: Math.round(m15.wind_speed_10m?.[i] ?? 0),
@@ -471,6 +494,11 @@ const LOCAL_MAP_GRID = 5;           // 5×5 grid = 25 points around the location
 const LOCAL_MAP_STEP_DEG = 0.25;    // spacing between grid points (≈ ±0.5° ≈ 40–55 km)
 const LOCAL_MAP_CACHE_TTL_MS = 10 * 60 * 1000;
 const LOCAL_MAP_SLOTS = 13;         // 13 × 15 min = 0…180 min ahead (Now → +3h)
+// Trace-drizzle threshold: amounts below this are the model wetting the air,
+// not rain you would feel. They get their own faint drizzle cell type so the
+// map can tell a sun shower apart from a downpour. Keep in sync with
+// LOCALMAP_RAIN_MIN_MM in index.html (localMapClassify).
+const LOCAL_MAP_RAIN_MIN_MM = 0.3;
 
 // Cached by rounded coordinates: the top-down view changes slowly, and this keeps
 // the 25 sub-requests off Open-Meteo on every 30-second page refresh while the
@@ -480,7 +508,11 @@ const localMapCache = new Map();
 function classifyLocalCell(code, precipitation, snowfall, cloudCover) {
   if (HAIL_CODES.has(code)) return 'hail';
   if (SNOW_CODES.has(code) || snowfall > 0) return 'snow';
-  if ((code >= 51 && code <= 67) || (code >= 80 && code <= 82) || precipitation > 0) return 'rain';
+  if (precipitation >= LOCAL_MAP_RAIN_MIN_MM) return 'rain';
+  if ((code >= 61 && code <= 67) || (code >= 80 && code <= 82)) return 'rain';
+  // Drizzle codes (51–57) or any trace amount above zero → a faint drizzle haze.
+  if ((code >= 51 && code <= 57) || precipitation > 0) return 'drizzle';
+  if (code === 45 || code === 48) return 'fog';
   if (cloudCover >= 40) return 'clouds';
   return 'clear';
 }
@@ -488,8 +520,8 @@ function classifyLocalCell(code, precipitation, snowfall, cloudCover) {
 async function fetchLocalCell(latitude, longitude) {
   const url =
     `https://api.open-meteo.com/v1/forecast?latitude=${latitude}&longitude=${longitude}` +
-    '&current=temperature_2m,weather_code,precipitation,snowfall,cloud_cover,wind_speed_10m,wind_direction_10m' +
-    '&minutely_15=temperature_2m,weather_code,precipitation,precipitation_probability,cloud_cover,snowfall,wind_speed_10m,wind_direction_10m' +
+    '&current=temperature_2m,apparent_temperature,weather_code,precipitation,snowfall,cloud_cover,wind_speed_10m,wind_direction_10m' +
+    '&minutely_15=temperature_2m,apparent_temperature,weather_code,precipitation,precipitation_probability,cloud_cover,snowfall,wind_speed_10m,wind_direction_10m' +
     `&forecast_minutely_15=${LOCAL_MAP_SLOTS}&timezone=auto`;
   const response = await fetch(url, { signal: AbortSignal.timeout(7000) });
   if (!response.ok) throw new Error(`Local cell HTTP ${response.status}`);
@@ -502,13 +534,23 @@ async function fetchLocalCell(latitude, longitude) {
   const cloudCover = Math.round(current.cloud_cover ?? 0);
   const windSpeed = Math.round(current.wind_speed_10m ?? 0);
   const windDirection = Math.round(current.wind_direction_10m ?? 0);
-  const mapped = mapWeatherCodeToCondition(weatherCode);
+  const temp = Math.round(current.temperature_2m ?? 0);
+  let mapped = mapWeatherCodeToCondition(weatherCode);
+  let type = classifyLocalCell(weatherCode, precipitation, snowfall, cloudCover);
+  // Snow honesty: snow cannot fall well above freezing — a snowy code or
+  // snowfall amount at warm temperatures is a model quirk, so the cell reads
+  // as rain (icon AND map-blob type agree with the temperature, matching the
+  // SNOW_TOO_WARM_C guard in index.html's localMapFrameCell).
+  if (temp > SNOW_TOO_WARM_C && (SNOW_CODES.has(weatherCode) || snowfall > 0)) {
+    mapped = { condition: 'Rain', icon: '🌧️' };
+    type = classifyLocalCell(63, precipitation, 0, cloudCover);
+  }
 
   // Compact 15-minute forecast series (0…180 min) so the front end can show
   // every cell of the radar moving forward in time. Stored as parallel arrays
   // (not objects) to keep the JSON payload small for 25 cells × 13 slots.
   const slotCount = Math.min(LOCAL_MAP_SLOTS, Array.isArray(m15.time) ? m15.time.length : 0);
-  const series = { times: [], codes: [], precip: [], prob: [], cloud: [], snow: [], temps: [], wind: [], windDir: [] };
+  const series = { times: [], codes: [], precip: [], prob: [], cloud: [], snow: [], temps: [], feels: [], wind: [], windDir: [] };
   for (let i = 0; i < slotCount; i += 1) {
     series.times.push(m15.time[i] || '');
     series.codes.push(m15.weather_code?.[i] ?? 0);
@@ -517,6 +559,7 @@ async function fetchLocalCell(latitude, longitude) {
     series.cloud.push(Math.round(m15.cloud_cover?.[i] ?? 0));
     series.snow.push(Math.round((m15.snowfall?.[i] ?? 0) * 10) / 10);
     series.temps.push(Math.round(m15.temperature_2m?.[i] ?? 0));
+    series.feels.push(Math.round(m15.apparent_temperature?.[i] ?? m15.temperature_2m?.[i] ?? 0));
     series.wind.push(Math.round(m15.wind_speed_10m?.[i] ?? 0));
     series.windDir.push(Math.round(m15.wind_direction_10m?.[i] ?? 0));
   }
@@ -524,11 +567,12 @@ async function fetchLocalCell(latitude, longitude) {
   return {
     lat: Math.round(latitude * 100) / 100,
     lon: Math.round(longitude * 100) / 100,
-    type: classifyLocalCell(weatherCode, precipitation, snowfall, cloudCover),
+    type,
     condition: mapped.condition,
     icon: mapped.icon,
     weatherCode,
-    temp: Math.round(current.temperature_2m ?? 0),
+    temp,
+    feels: Math.round(current.apparent_temperature ?? current.temperature_2m ?? 0),
     precipitation,
     snowfall,
     cloudCover,
@@ -932,13 +976,14 @@ async function fetchWeatherApiWeather(geocoded) {
   const humidity = Math.round(current.humidity ?? 0);
   const windSpeed = Math.round(current.wind_kph ?? 0);
   const windDirection = current.wind_dir || degreesToCardinal(current.wind_degree ?? 0);
+  const feelsLike = Math.round(current.feelslike_c ?? temperature);
   const currentWmo = mapWapiCodeToWmo(current.condition?.code ?? 1000);
-  const mapped = mapWeatherCodeToCondition(currentWmo);
+  const mapped = honestSnowCondition(currentWmo, temperature) || mapWeatherCodeToCondition(currentWmo);
 
   // 3-day forecast (Today / Tomorrow / Day After).
   const forecast = forecastDays.slice(0, 3).map((day, index) => {
     const dayWmo = mapWapiCodeToWmo(day.day?.condition?.code ?? 1000);
-    const dayMapped = mapWeatherCodeToCondition(dayWmo);
+    const dayMapped = honestSnowCondition(dayWmo, day.day?.maxtemp_c) || mapWeatherCodeToCondition(dayWmo);
     // The day summary has no dominant wind direction, so borrow it from the
     // midday hour (or the first hour of that day).
     const hours = Array.isArray(day.hour) ? day.hour : [];
@@ -954,7 +999,9 @@ async function fetchWeatherApiWeather(geocoded) {
       humidity: Math.round(day.day?.avghumidity ?? 0),
       windSpeed: windSpeedDay,
       windDirection: midday.wind_dir || degreesToCardinal(midday.wind_degree ?? 0),
-      beaufort: windSpeedToBeaufort(windSpeedDay)
+      beaufort: windSpeedToBeaufort(windSpeedDay),
+      feelsHigh: midday.feelslike_c != null ? Math.round(midday.feelslike_c) : null,
+      feelsLow: midday.feelslike_c != null ? Math.round(midday.feelslike_c) : null
     };
   });
 
@@ -994,6 +1041,7 @@ async function fetchWeatherApiWeather(geocoded) {
   return {
     temperature,
     humidity,
+    feelsLike,
     windSpeed,
     windDirection,
     beaufort: windSpeedToBeaufort(windSpeed),
@@ -1012,22 +1060,22 @@ async function fetchWeatherApiWeather(geocoded) {
 
 // ===== Provider 2: Open-Meteo (keyless fallback) =======================
 async function fetchOpenMeteoWeather(geocoded, localMap, nearbyPlaces) {
-  const url = `https://api.open-meteo.com/v1/forecast?latitude=${geocoded.latitude}&longitude=${geocoded.longitude}&current=temperature_2m,relative_humidity_2m,wind_speed_10m,wind_direction_10m,weather_code&minutely_15=temperature_2m,weather_code,precipitation,precipitation_probability,wind_speed_10m,wind_direction_10m,uv_index,uv_index_clear_sky,cloud_cover,is_day&forecast_minutely_15=${NOWCAST_SLOTS}&daily=weathercode,temperature_2m_max,temperature_2m_min,wind_speed_10m_max,wind_direction_10m_dominant,relative_humidity_2m_max,relative_humidity_2m_min&timezone=auto`;
+  const url = `https://api.open-meteo.com/v1/forecast?latitude=${geocoded.latitude}&longitude=${geocoded.longitude}&current=temperature_2m,apparent_temperature,relative_humidity_2m,wind_speed_10m,wind_direction_10m,weather_code&minutely_15=temperature_2m,apparent_temperature,weather_code,precipitation,precipitation_probability,wind_speed_10m,wind_direction_10m,uv_index,uv_index_clear_sky,cloud_cover,is_day&forecast_minutely_15=${NOWCAST_SLOTS}&daily=weathercode,temperature_2m_max,temperature_2m_min,apparent_temperature_max,apparent_temperature_min,wind_speed_10m_max,wind_direction_10m_dominant,relative_humidity_2m_max,relative_humidity_2m_min&timezone=auto`;
 
   const response = await fetch(url, { signal: AbortSignal.timeout(10000) });
   if (!response.ok) throw new Error(`HTTP ${response.status}`);
 
   const data = await response.json();
   const current = data.current ?? {};
-  const mapped = mapWeatherCodeToCondition(current.weather_code ?? 0);
-
   const temperature = Math.round(current.temperature_2m ?? 0);
+  const mapped = honestSnowCondition(current.weather_code ?? 0, temperature) || mapWeatherCodeToCondition(current.weather_code ?? 0);
   const humidity = Math.round(current.relative_humidity_2m ?? 0);
   const windSpeed = Math.round(current.wind_speed_10m ?? 0);
   const windDirection = degreesToCardinal(current.wind_direction_10m ?? 0);
 
   return {
     temperature,
+    feelsLike: Math.round(current.apparent_temperature ?? temperature),
     humidity,
     windSpeed,
     windDirection,
@@ -1095,6 +1143,7 @@ module.exports = async function handler(req, res) {
     res.end(JSON.stringify({
       temperature: 18,
       humidity: 62,
+      feelsLike: 15,
       windSpeed: 13,
       windDirection: 'NE',
       beaufort: 4,
@@ -1130,4 +1179,4 @@ module.exports.buildAlerts = buildAlerts;
 module.exports.checkAlertsForCoords = checkAlertsForCoords;
 module.exports.windSpeedToBeaufort = windSpeedToBeaufort;
 // Internal helpers (for tests / debugging): WeatherAPI.com provider pieces.
-module.exports._internal = { buildWapiTimeline, mapWapiCodeToWmo };
+module.exports._internal = { buildWapiTimeline, mapWapiCodeToWmo, classifyLocalCell };

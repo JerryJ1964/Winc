@@ -1,0 +1,22 @@
+{
+  "name": "ai-weather-station-pwa",
+  "version": "1.1.0",
+  "private": true,
+  "description": "AI Weather Station — PWA with location-based weather alert push notifications (rain, hail, snow, wind above Beaufort 4) for users anywhere on Earth.",
+  "scripts": {
+    "test": "node tests/alertLogic.test.js",
+    "start": "node server-local.js",
+    "dev": "node server-local.js",
+    "sync-dist": "node scripts/sync-dist.js",
+    "deploy": "node scripts/sync-dist.js && vercel --prod --yes"
+  },
+  "dependencies": {
+    "web-push": "^3.6.7"
+  },
+  "author": "Jerry van den Berg",
+  "license": "MIT",
+  "devDependencies": {
+    "jsdom": "^29.1.1",
+    "puppeteer": "^25.10.0"
+  }
+}

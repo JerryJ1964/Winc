@@ -1,0 +1,21 @@
+# Local/legacy stuff — never upload
+.ai-weather-station-backup
+.env
+.env.local
+.env*.local
+.history
+.vercel
+.vscode
+node_modules
+ai-weather-station
+_dev.cmd
+_deploy.cmd
+deploy.log
+_*.js
+_*.txt
+_*.zip
+_*.log
+_chrome
+_chrome.zip
+*.log
+README.md

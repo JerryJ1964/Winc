@@ -1,0 +1,32 @@
+{
+  "name": "AI Weather Station",
+  "short_name": "Weather Station",
+  "description": "Live weather, 3-day forecast and automatic alerts for rain, hail, snow and strong wind (above Beaufort 4) at your location — anywhere on Earth.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0f2d57",
+  "theme_color": "#0f2d57",
+  "categories": ["weather", "utilities"],
+  "icons": [
+    {
+      "src": "/icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}
