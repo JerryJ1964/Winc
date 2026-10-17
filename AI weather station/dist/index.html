@@ -8,7 +8,7 @@
     <!-- build:globe-glow-circles-20261001-2 — the same two colours now mark the events ON the globe: every observed 🪨 mudslide / landslide draws as a luminous fluorescent GREEN circle and every official 🏔️ avalanche zone as a luminous fluorescent BLUE circle (shared drawLuminousCircle helper: additive fluorescent halo + white-cored neon disc + crisp white rim, gently breathing). Modelled risk halos are re-tinted to match (green for slope risk, icy blue for snow load) and stay soft/unclickable so estimates can never be mistaken for events. Only the marker look changed — data feeds, labels, click targets and the danger number inside the blue disc are untouched. -->
 
 
-    <!-- build:localmap-organic-radar-20261017-1 — 🛱️ organic radar + synced needle: the 🛱️ seen-from-above grid no longer paints sharp overlapping squares — each 5x5 cell now draws a 28-vertex rounded blob (superellipse + deterministic wobble) with softened antialiased fills that melt into one continuous sheet, and the 🔴 timeline needle stays centred over the selected forecast block (DOM-measured, frame-time % fallback) so it moves in sync with the slider / playback / tap instead of sitting at 50%. -->
+    <!-- build:localmap-cloud-drift-20261017-2 — 🌧️ radar clouds glide again: the organic-blob drift engine (localMapGLDriftGrid, ~12 fps, same wind math as the icons, wrapped inside ±half a cell) is now actually driven by the icon animation loop + re-armed on every grid rebuild, so rain/cloud blobs stream with the live wind instead of sitting frozen while a forecast frame is on screen. Blobs + needle unchanged. -->
     <!-- build:nowcast-20260827-1 -->
     <!-- build:pwa-alerts-20260829-1 — installable PWA + push notifications for rain / hail / snow / wind > Beaufort 4 -->
     <!-- build:ios-fixes-20260830-1 — iOS warnings work, Download button visible on iOS, polar-safe globe rotation (spin-then-tilt) -->
@@ -12038,6 +12038,8 @@ async function sendTestPush() {
         let localMapGLPin = null;                 // 📍 tap-a-spot pin (tap the map → weather for that place)
         let localMapGLPinCoords = null;           // { lat, lon } of the pin — used to detect stale pins
         let localMapLastTapAt = 0;                // double-tap debounce — the 2nd tap of a double-tap is a zoom gesture
+        let localMapGLGridDriftRAF = 0;           // 🌧️ live radar drift — blobs glide with the wind (below)
+        let localMapGLGridDriftCells = null;      // raw cells + spacing for the drift loop (rebuilt per frame)
         const localMapGLState = { dataRef: null, gridFrame: -1, ringsKey: '', placesKey: '', homeKey: '' };
         const localMapGLEmptyFC = { type: 'FeatureCollection', features: [] };
 
@@ -12473,6 +12475,61 @@ async function sendTestPush() {
             return `${cell.icon || ''} ${cell.condition || ''} · ${cell.temp}°C · 💧 ${cell.precipitation} mm · ☁️ ${cell.cloudCover}%${windText}`;
         }
 
+        function localMapGLBlobRing(lon, lat, seed, hx, hy) {
+            const N = 28, ring = [];
+            for (let k = 0; k < N; k += 1) {
+                const a = (k / N) * Math.PI * 2;
+                const wob = 1 + 0.13 * Math.sin(3 * a + seed * 1.7) + 0.07 * Math.sin(5 * a + seed * 2.9);
+                const ex = Math.sign(Math.cos(a)) * Math.pow(Math.abs(Math.cos(a)), 0.72);
+                const ey = Math.sign(Math.sin(a)) * Math.pow(Math.abs(Math.sin(a)), 0.72);
+                ring.push([lon + ex * hx * wob, lat + ey * hy * wob]);
+            }
+            ring.push(ring[0].slice());
+            return ring;
+        }
+
+        // 🌧️ Live drift state: one entry per radar blob so the GeoJSON field can
+        // glide with the wind between forecast frames (same wind math as the icons).
+        let localMapGLGridDriftLast = 0;
+        function localMapGLDriftGrid(t) {
+            try {
+                if (!localMapGL || !localMapGLReady) return;
+                const drift = localMapGLGridDriftCells;
+                if (!drift || !drift.length) return;
+                if (!localMapGL.getSource) return;
+                const src = localMapGL.getSource('lmc-grid');
+                if (!src || !src.setData) return;
+                // ~12 fps is plenty for clouds — cheaper than 60 fps, still silky.
+                if ((t - localMapGLGridDriftLast) * 1000 < 80) return;
+                localMapGLGridDriftLast = t;
+                const features = [];
+                for (const d of drift) {
+                    let dLon = 0, dLat = 0;
+                    try {
+                        const p0 = localMapGL.project([d.lon, d.lat]);
+                        const speedPx = Math.max(3, 10 + d.windKmh * 0.42);
+                        const px = localMapGL.project([d.lon + d.wrapLon, d.lat]);
+                        const py = localMapGL.project([d.lon, d.lat + d.wrapLat]);
+                        const cellPxX = Math.max(14, Math.abs(px.x - p0.x));
+                        const cellPxY = Math.max(14, Math.abs(py.y - p0.y));
+                        const ox = wrapMod2(Math.sin(d.windDirRad) * speedPx * t, 2 * cellPxX) - cellPxX + Math.sin(t * 0.6 + d.phase) * cellPxX * 0.16;
+                        const oy = wrapMod2(-Math.cos(d.windDirRad) * speedPx * t, 2 * cellPxY) - cellPxY + Math.cos(t * 0.8 + d.phase * 0.9) * cellPxY * 0.16;
+                        const back = localMapGL.unproject([p0.x + ox, p0.y + oy]);
+                        const blon = Array.isArray(back) ? back[0] : back.lng;
+                        const blat = Array.isArray(back) ? back[1] : back.lat;
+                        if (Number.isFinite(blon) && Number.isFinite(blat)) { dLon = blon - d.lon; dLat = blat - d.lat; }
+                    } catch (err) { /* keep base position */ }
+                    features.push({
+                        type: 'Feature',
+                        id: d.i + 1,
+                        properties: { i: d.i, cls: d.cls, fill: d.fill, op: 1, tip: d.tip, icon: d.icon },
+                        geometry: { type: 'Polygon', coordinates: [localMapGLBlobRing(d.lon + dLon, d.lat + dLat, d.i + 1, d.hx, d.hy)] }
+                    });
+                }
+                src.setData({ type: 'FeatureCollection', features });
+            } catch (err) { /* drift is cosmetic — never break the map */ }
+        }
+
         function localMapGLBuildGrid(data, cells) {
             const { dLon, dLat } = localMapGLGridSpacing(cells);
             // Cells overlap (~95% of grid spacing) so the radar field stays
@@ -12484,23 +12541,29 @@ async function sendTestPush() {
             // (superellipse + deterministic wobble) instead of a sharp
             // rectangle, so rain clouds read as clouds — soft overlapping
             // discs that melt into a continuous sheet, never square blocks.
+            // 🌧️ The blobs then DRIFT with the live wind (localMapGLDriftGrid,
+            // driven by the icon drift loop) so the radar glides even while a
+            // single forecast frame is on screen — no more frozen clouds.
             const hx = dLon * 0.68, hy = dLat * 0.68;
-            const blobRing = (lon, lat, seed) => {
-                const N = 28, ring = [];
-                for (let k = 0; k < N; k += 1) {
-                    const a = (k / N) * Math.PI * 2;
-                    const wob = 1 + 0.13 * Math.sin(3 * a + seed * 1.7) + 0.07 * Math.sin(5 * a + seed * 2.9);
-                    const ex = Math.sign(Math.cos(a)) * Math.pow(Math.abs(Math.cos(a)), 0.72);
-                    const ey = Math.sign(Math.sin(a)) * Math.pow(Math.abs(Math.sin(a)), 0.72);
-                    ring.push([lon + ex * hx * wob, lat + ey * hy * wob]);
-                }
-                ring.push(ring[0].slice());
-                return ring;
-            };
+            const blobRing = (lon, lat, seed) => localMapGLBlobRing(lon, lat, seed, hx, hy);
             const features = [];
+            const drift = [];
+            const wrapLon = Math.max(dLon, 0.004) * 0.5;   // ± half a cell (same wrap as icons)
+            const wrapLat = Math.max(dLat, 0.004) * 0.5;
             cells.forEach((raw, i) => {
                 const cell = localMapFrameCell(raw, localMapFrame);
                 const cls = cell.type || 'clear';
+                // Keep this cell's live wind so the blob can flow with it
+                const fromDeg = typeof cell.wind_direction === 'number' && Number.isFinite(cell.wind_direction) ? cell.wind_direction : 0;
+                const windKmh = Math.max(0, Number(cell.wind_speed) || 0);
+                drift.push({
+                    i, lon: cell.lon, lat: cell.lat, hx, hy,
+                    cls, fill: localMapGLCellPaint(cls, cell),
+                    tip: localMapGLCellTip(cell), icon: cell.icon || LOCALMAP_ICON_OTHER,
+                    windDirRad: ((fromDeg + 180) % 360) * Math.PI / 180,
+                    windKmh, wrapLon, wrapLat,
+                    phase: Math.abs(cell.lat * 0.731 + cell.lon * 0.159)
+                });
                 features.push({
                     type: 'Feature',
                     id: i + 1,
@@ -12516,7 +12579,16 @@ async function sendTestPush() {
                 });
             });
             localMapGL.getSource('lmc-grid').setData({ type: 'FeatureCollection', features });
+            localMapGLGridDriftCells = drift;   // 🌧️ live drift loop glides these blobs with the wind
             localMapGLState.gridFrame = localMapFrame;
+            // The icon loop owns the rAF clock — make sure it is running so the
+            // freshly stored blobs start gliding immediately (e.g. first paint
+            // before icons exist, or after a frame rebuild cancelled it).
+            try {
+                if (!localMapGLIconDriftRAF && typeof requestAnimationFrame === 'function') {
+                    localMapGLIconDriftRAF = requestAnimationFrame(localMapGLIconDriftLoop);
+                }
+            } catch (err) { /* drift is cosmetic */ }
         }
 
         // ☀️⛅☁️🌧️ Weather icons as HTML markers — GPU symbol layers can't reliably
@@ -12595,11 +12667,16 @@ async function sendTestPush() {
         // 🌬️ Drift clock: every on-map icon flows with its cell's live wind
         // (direction where the wind blows TOWARD, speed ∝ km/h), wrapped inside
         // ±half of its cell so the icon stays tied to its sky patch while
-        // visibly streaming across the map.
+        // visibly streaming across the map. The radar BLOBS glide on the same
+        // clock (localMapGLDriftGrid) so rain clouds are never frozen while a
+        // single forecast frame is on screen.
         let localMapGLIconDriftRAF = 0;
         function localMapGLIconDriftLoop() {
-            if (!localMapGLIconMarkers.length) { localMapGLIconDriftRAF = 0; return; }
-            localMapGLRepositionIcons();
+            const hasIcons = !!(localMapGLIconMarkers && localMapGLIconMarkers.length);
+            const hasBlobs = !!(typeof localMapGLGridDriftCells !== 'undefined' && localMapGLGridDriftCells && localMapGLGridDriftCells.length);
+            if (!hasIcons && !hasBlobs) { localMapGLIconDriftRAF = 0; return; }
+            if (hasIcons) localMapGLRepositionIcons();
+            try { localMapGLDriftGrid(performance.now() / 1000); } catch (err) { /* drift is cosmetic */ }
             localMapGLIconDriftRAF = requestAnimationFrame(localMapGLIconDriftLoop);
         }
 
