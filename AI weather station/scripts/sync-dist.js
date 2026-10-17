@@ -9,7 +9,7 @@ const root = path.join(__dirname, '..');
 const dist = path.join(root, 'dist');
 
 // Files that make up the deployed site (Vercel rootDirectory = dist).
-const files = ['index.html', 'main.js', 'sw.js', 'manifest.json', 'vercel.json', 'api/push.js', 'api/weather.js', 'api/nhc.js', 'icons/icon-192.png', 'icons/icon-512.png'];
+const files = ['index.html', 'main.js', 'sw.js', 'manifest.json', 'vercel.json', 'api/push.js', 'api/weather.js', 'api/nhc.js', 'api/earthquake.js', 'api/tsunami.js', 'api/volcano.js', 'api/fires.js', 'icons/icon-192.png', 'icons/icon-512.png'];
 
 for (const f of files) {
   const src = path.join(root, f);

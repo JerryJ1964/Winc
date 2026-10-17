@@ -1,6 +1,9 @@
 const DEFAULT_LOCATION = 'Vlaardingen, Netherlands';
 // build:nowcast-20260827-1
 // build:alerts-20260829-1 — rain / hail / snow / wind-above-Beaufort-4 alert flags for push notifications
+// build:clear-night-20260914-1 — 🌙 a cloudless NIGHT sky gets its own icon: when the sun is down (is_day = 0), WMO code 0 (Clear) becomes "Clear Night" 🌙 and code 1 (Mainly Clear) swaps ☀️/🌤️ for 🌙 — applied everywhere the weather code is mapped: current conditions (WeatherAPI + Open-Meteo), the 15-minute nowcast slots (which now carry isDay), the 5×5 local-map cells and their forecast frames, and the AI prediction ("Clear starry night…"). The response also exposes isDay so the front end can swap ☀️ → 🌙 in its own icon map, and the "Sun" nowcast badge + the slot "☀️ n%" line only appear while the sun is actually up. Also fixes a latent crash in buildWapiTimeline (next/lerp referenced before their const declarations — a temporal-dead-zone ReferenceError that killed every WeatherAPI nowcast build and silently forced the Open-Meteo fallback).
+// build:forecast14-20260915-1 — 📅 14-day forecast for any location on Earth: the response now carries `forecast14`, an array of 14 daily entries (date, Today/Tomorrow/weekday label, weather condition + WMO code, max & min temperature, wind speed + dominant direction in km/h and compass points with Beaufort force, and the chance of rain as a % plus the expected precipitation in mm). WeatherAPI.com's free plan only serves 3 days, so the 14-day daily data always comes from a separate, keyless Open-Meteo daily call that is cached server-side for 10 minutes per ~5 km area — the 30-second front-end auto-refresh costs nothing extra. The existing 3-day `forecast` array (and every other field) is unchanged.
+// build:holiday-week-20260918-1 — 🌤️ Honest day cards: the 3-day `forecast` Today/Tomorrow cards and the 14-day `forecast14` days only keep a rain icon on real rain (≥ 1 mm in the day or a ≥ 60 % peak chance); a dry "Patchy rain nearby" day (e.g. 0.51 mm / 45 %) reads ⛅/☁️/☀️ from its own daytime cloud cover instead of 🌧️ while the sun shines.
 const DEFAULT_LATITUDE = 51.9192;
 const DEFAULT_LONGITUDE = 4.3599;
 
@@ -79,7 +82,7 @@ async function reverseGeocode(latitude, longitude, fallbackLabel) {
   return fallbackLabel || `${latitude.toFixed(4)}, ${longitude.toFixed(4)}`;
 }
 
-function mapWeatherCodeToCondition(code) {
+function mapWeatherCodeToCondition(code, isDay) {
   const mapping = {
     0: { condition: 'Clear', icon: '☀️' },
     1: { condition: 'Mainly Clear', icon: '🌤️' },
@@ -107,9 +110,24 @@ function mapWeatherCodeToCondition(code) {
     85: { condition: 'Snow Showers', icon: '❄️' },
     86: { condition: 'Heavy Snow Showers', icon: '❄️' },
     95: { condition: 'Thunderstorm', icon: '⛈️' },
-    96: { condition: 'Thunderstorm', icon: '⛈️' },
-    99: { condition: 'Thunderstorm', icon: '⛈️' }
+    96: { condition: 'Thunderstorm with Hail', icon: '🧊' },
+    99: { condition: 'Thunderstorm with Heavy Hail', icon: '🧊' }
   };
+  // 🌙 Night: the sun cannot shine after dark — a cloudless sky shows the moon
+  // and the stars instead of the sun. An explicit isDay === false means
+  // "night"; omitting the flag (daily summaries, fallbacks without day/night
+  // info) keeps the classic sun icons. Rain, snow, fog … keep their icons at
+  // night — only the clear families change, because ☀️ and 🌤️ both draw a sun.
+  //
+  // 🧊 Hail (96/99) deliberately wears the ice icon, not ⛈️: a hail-bearing
+  // thunderstorm is the one thing that must stand out, and 🧊 is the icon the
+  // 🛰️ map, its layer toggle and its legend already use. The condition text
+  // keeps the thunder, so nothing is lost. The front end mirrors this table
+  // 1:1 in WEATHER_CODE_INFO (index.html).
+  if (isDay === false) {
+    if (code === 0) return { condition: 'Clear Night', icon: '🌙' };
+    if (code === 1) return { condition: 'Mainly Clear', icon: '🌙' };
+  }
   return mapping[code] ?? { condition: 'Unknown', icon: '🌡️' };
 }
 // ===== 🌦️ WeatherAPI.com provider (optional, keyed) ====================
@@ -198,33 +216,54 @@ function buildWapiTimeline(forecastDays, localNow) {
     const entry = slots.find((s) => at >= s.minutes && at < s.minutes + 60);
     if (!entry) break;
     const hour = entry.hour;
-    const wmo = mapWapiCodeToWmo(hour.condition?.code ?? 1000);
-    const slotTemp = Math.round(lerp(hour.temp_c ?? 0, next?.hour.temp_c ?? 0));
-    const mapped = honestSnowCondition(wmo, slotTemp) || mapWeatherCodeToCondition(wmo);
     // WeatherAPI only provides hourly steps, but the UI (sky strip, red
     // arrival streak) expects smooth 15-minute values — linearly interpolate
     // between this hour and the next instead of repeating flat quarters.
+    // next/lerp are computed FIRST: the previous order referenced them above
+    // their const declarations, a temporal-dead-zone ReferenceError that
+    // crashed every WeatherAPI nowcast build and silently forced the
+    // Open-Meteo fallback.
     const next = byMinutes.get(entry.minutes + 60);
     const f = next ? (at - entry.minutes) / 60 : 0;
     const lerp = (a, b) =>
       next && typeof a === 'number' && typeof b === 'number' ? a + (b - a) * f : a;
-    const cloudCover = Math.round(lerp(hour.cloud ?? 0, next?.hour.cloud ?? 0));
+    const wmo = mapWapiCodeToWmo(hour.condition?.code ?? 1000);
+    const slotTemp = Math.round(lerp(hour.temp_c ?? 0, next?.hour.temp_c ?? 0));
     const isDay = (hour.is_day ?? 1) === 1;
+    const cloudCover = Math.round(lerp(hour.cloud ?? 0, next?.hour.cloud ?? 0));
+    // Amount and chance FIRST, because the icon must agree with them: this
+    // quarter-hour's millimetres come from the hourly mm/h (÷ 4), rounded to the
+    // same 0.1 mm step shown in the UI, so the  value and the icon agree.
+    const precipMm = Math.round((lerp(hour.precip_mm ?? 0, next?.hour.precip_mm ?? 0) / 4) * 10) / 10;
+    let precipProb = Math.round(Math.max(
+      lerp(hour.chance_of_rain ?? 0, next?.hour.chance_of_rain ?? 0),
+      lerp(hour.chance_of_snow ?? 0, next?.hour.chance_of_snow ?? 0)
+    ));
+    // 🌙 As in buildNowcast: a dry, near-cloudless slot that turns into
+    // "Clear Night" gets an honest 0 % overnight chance instead of a leftover
+    // daytime "rain nearby" percentage.
+    if (isDay === false && precipProb >= SLOT_RAIN_PROB_MIN && precipMm < SLOT_RAIN_MIN_MM
+      && cloudCover < SLOT_PARTLY_COVER) {
+      precipProb = 0;
+    }
+    // 🌙 Clear sky at night shows the moon — the sun cannot shine after dark.
+    // 🌤️ And no slot claims rain when nothing is expected to land: WeatherAPI's
+    // "Patchy rain nearby" hours (0.01–0.03 mm, 17 % chance) read as the sky
+    // that is really overhead instead of 🌧️ on every quarter-hour.
+    const mapped = honestSlotWeather(wmo, slotTemp, isDay, precipMm, precipProb, cloudCover);
     const time = formatWapiTimeMinutes(at);
     timeline.push({
       time,
       label: time.slice(11, 16),
       condition: mapped.condition,
       icon: mapped.icon,
-      weatherCode: wmo,
+      weatherCode: mapped.weatherCode ?? wmo,
       cloudCover,
+      isDay,
       temperature: slotTemp,
       feelsLike: Math.round(lerp(hour.feelslike_c ?? hour.temp_c ?? 0, next?.hour.feelslike_c ?? next?.hour.temp_c ?? 0)),
-      precipMm: Math.round((lerp(hour.precip_mm ?? 0, next?.hour.precip_mm ?? 0) / 4) * 10) / 10,
-      precipProb: Math.round(Math.max(
-        lerp(hour.chance_of_rain ?? 0, next?.hour.chance_of_rain ?? 0),
-        lerp(hour.chance_of_snow ?? 0, next?.hour.chance_of_snow ?? 0)
-      )),
+      precipMm,
+      precipProb,
       windKmh: Math.round(lerp(hour.wind_kph ?? 0, next?.hour.wind_kph ?? 0)),
       uvIndex: typeof hour.uv === 'number' ? Math.round(hour.uv * 10) / 10 : null,
       uvPct: !isDay ? 0 : Math.max(0, 100 - cloudCover)
@@ -264,11 +303,19 @@ function buildForecast(data) {
   const windDir = data.daily?.wind_direction_10m_dominant ?? [];
   const humidityMax = data.daily?.relative_humidity_2m_max ?? [];
   const humidityMin = data.daily?.relative_humidity_2m_min ?? [];
+  // Day-scale honesty needs the same two numbers the 15-minute rule uses: the
+  // whole day's millimetres and its peak chance. Open-Meteo's daily block does
+  // not reliably carry them on this call (precipitation fields may be absent),
+  // so they are optional — without them honestDayWeather keeps the provider's
+  // own icon instead of guessing.
+  const precipSum = data.daily?.precipitation_sum ?? [];
+  const precipProb = data.daily?.precipitation_probability_max ?? [];
+  const cloudMean = data.daily?.cloud_cover_mean ?? data.daily?.cloudcover_mean ?? [];
 
   return dates.slice(0, 3).map((date, index) => {
-    // A snowy code on a day whose HIGH is too warm for snow reads as rain
-    // (honestSnowCondition) — the icon then matches the forecast temperature.
-    const mapped = honestSnowCondition(codes[index] ?? 0, highs[index]) || mapWeatherCodeToCondition(codes[index] ?? 0);
+    const mapped = honestDayWeather(
+      codes[index] ?? 0, highs[index], precipSum[index], precipProb[index], cloudMean[index]
+    );
     const maxHum = humidityMax[index];
     const minHum = humidityMin[index];
     const humidity = maxHum != null && minHum != null
@@ -281,7 +328,7 @@ function buildForecast(data) {
       day: formatDayLabel(date, index),
       condition: mapped.condition,
       icon: mapped.icon,
-      weatherCode: codes[index] ?? 0,
+      weatherCode: mapped.weatherCode ?? (codes[index] ?? 0),
       high: highs[index] !== undefined ? Math.round(highs[index]) : null,
       low: lows[index] !== undefined ? Math.round(lows[index]) : null,
       feelsHigh: feelsHighs[index] !== undefined ? Math.round(feelsHighs[index]) : null,
@@ -292,6 +339,260 @@ function buildForecast(data) {
       beaufort: windSpeedToBeaufort(windSpeed)
     };
   });
+}
+
+// ===== 📅 14-day forecast (daily-only, works for any location on Earth) =====
+// WeatherAPI.com's free plan caps the forecast at 3 days, so the 14-day tab
+// always takes its daily data from keyless Open-Meteo — one daily-only call,
+// cached per ~5 km area for 10 minutes so the 30-second auto-refresh costs
+// nothing extra. Each entry carries everything the tab needs to show: the
+// weather type (condition + WMO code for the icon), max & min temperature,
+// wind speed + dominant direction (cardinal + degrees for the arrow) and the
+// probability of rain as a % with the expected precipitation in mm.
+// build:forecast14-30min-20260919-1 — ⏱️ 30-minute intervals inside the 📅 14-day tab:
+// every day now carries `hours`, 48 half-hour slots (00:00, 00:30 … 23:30) with
+// temperature, weather condition + WMO code (icon), wind speed + direction +
+// Beaufort force, chance of rain % and chance of sunshine % (100 − cloud cover
+// while the sun is up, 0 at night), plus precipitation mm. Open-Meteo only
+// serves true hourly steps, so the :30 slots are linearly interpolated between
+// the two neighbouring hours (wind direction via circular vector averaging;
+// the weather code is picked, not averaged — the wetter neighbour wins).
+const FORECAST14_DAYS = 14;
+const FORECAST14_SLOT_MINUTES = 30;
+const FORECAST14_SLOTS_PER_DAY = 48;
+const FORECAST14_CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
+const forecast14Cache = new Map();              // "lat,lon" (≈0.05°) → { at, data }
+const FORECAST14_CACHE_MAX = 200;
+
+function meanWindDir(a, b) {
+  if (a == null) return b == null ? 0 : b;
+  if (b == null) return a;
+  const rad = (deg) => (deg * Math.PI) / 180;
+  const x = Math.cos(rad(a)) + Math.cos(rad(b));
+  const y = Math.sin(rad(a)) + Math.sin(rad(b));
+  if (Math.abs(x) < 1e-9 && Math.abs(y) < 1e-9) return a;
+  return ((Math.atan2(y, x) * 180) / Math.PI + 360) % 360;
+}
+
+// Linear interpolation between two hourly values (`null` = unknown: a missing
+// side falls back to the known side so one gap never blanks a :30 slot).
+function lerpHalfHour(a, b) {
+  if (a == null) return b == null ? null : b;
+  if (b == null) return a;
+  return (a + b) / 2;
+}
+
+// Picks the representative weather code for an interpolated :30 slot: codes
+// are categorical, so they are picked — never averaged (averaging would invent
+// weather that is not there). The slot showing heavier weather (hail/snow over
+// rain over drizzle over fog over cloud over clear) wins so brief showers
+// survive the interpolation instead of being averaged away.
+function pickHalfHourCode(a, b) {
+  const codeA = a.code ?? 0;
+  const codeB = b.code ?? 0;
+  if (codeA === codeB) return codeA;
+  const rank = (slot) => {
+    if (HAIL_CODES.has(slot.code)) return 60 + (slot.prob ?? 0) / 100 + (slot.mm ?? 0);
+    if (SNOW_CODES.has(slot.code) || (slot.snow ?? 0) > 0) return 50 + (slot.prob ?? 0) / 100 + (slot.mm ?? 0);
+    if ((slot.mm ?? 0) >= SLOT_RAIN_MIN_MM || (slot.prob ?? 0) >= SLOT_RAIN_PROB_MIN) return 40 + (slot.prob ?? 0) / 100 + (slot.mm ?? 0);
+    if ((slot.code ?? 0) >= 51 && (slot.code ?? 0) <= 82) return 30 + (slot.prob ?? 0) / 100;
+    if ((slot.code ?? 0) === 45 || (slot.code ?? 0) === 48) return 20;
+    return 10 - (slot.cloud ?? 0) / 200;
+  };
+  return rank(a) >= rank(b) ? codeA : codeB;
+}
+
+function pad2(n) {
+  return String(n).padStart(2, '0');
+}
+
+// Builds the 48 half-hour slots for one calendar day from the location's FULL
+// hourly series. Picks the 24 hourly anchors whose local date matches `date`
+// (Open-Meteo `hourly.time` is `YYYY-MM-DDTHH:MM` in the requested timezone,
+// so a plain prefix compare is exact), then emits :00 straight from the hour
+// and :30 interpolated between that hour and the next (the 23:30 slot leans
+// on the first hour of the following day when the series reaches that far,
+// else it reuses 23:00 — the day always ends with 48 slots). Chance of
+// sunshine is 100 − cloud cover while the sun is up and 0 at night, so a
+// starry 02:00 can never promise sunshine.
+function buildForecast14DaySlots(date, hourly) {
+  if (!hourly || !Array.isArray(hourly.time)) return [];
+  const idx = [];
+  for (let i = 0; i < hourly.time.length; i++) {
+    if (typeof hourly.time[i] === 'string' && hourly.time[i].startsWith(date)) idx.push(i);
+  }
+  // The hourly series may start mid-day (day 1) or end mid-day (day 15 cut at
+  // 16 days × 24 h): only build slots when the full 24 anchors are present,
+  // otherwise the :30 interpolation would lean on the wrong day.
+  if (idx.length < 24) return [];
+  const read = (i) => ({
+    code: hourly.weather_code?.[i] ?? 0,
+    temp: hourly.temperature_2m?.[i] ?? null,
+    mm: hourly.precipitation?.[i] ?? 0,
+    prob: hourly.precipitation_probability?.[i] ?? 0,
+    cloud: hourly.cloud_cover?.[i] ?? 0,
+    wind: hourly.wind_speed_10m?.[i] ?? 0,
+    dir: hourly.wind_direction_10m?.[i] ?? null,
+    day: hourly.is_day?.[i] ?? 1,
+    snow: hourly.snowfall?.[i] ?? 0,
+  });
+  // Anchor AFTER the last hour of this day (first hour of the next day) for
+  // the 23:30 interpolation; falls back to 23:00 itself at the series edge.
+  const afterIdx = idx[23] + 1 < hourly.time.length ? idx[23] + 1 : idx[23];
+  const after = read(afterIdx);
+  const slots = [];
+  for (let h = 0; h < 24; h++) {
+    const cur = read(idx[h]);
+    const next = h < 23 ? read(idx[h + 1]) : after;
+    const pair = [
+      { h, m: 0, a: cur, b: cur, half: false },
+      { h, m: 30, a: cur, b: next, half: true },
+    ];
+    for (const p of pair) {
+      const code = p.half ? pickHalfHourCode(p.a, p.b) : p.a.code;
+      const tempRaw = p.half ? lerpHalfHour(p.a.temp, p.b.temp) : p.a.temp;
+      const temp = tempRaw == null ? null : Math.round(tempRaw);
+      const mm = Math.round((p.half ? lerpHalfHour(p.a.mm, p.b.mm) ?? 0 : p.a.mm) * 100) / 100;
+      const rainProbRaw = p.half ? lerpHalfHour(p.a.prob, p.b.prob) : p.a.prob;
+      const rainProb = rainProbRaw == null ? null : Math.round(rainProbRaw);
+      const cloudRaw = p.half ? lerpHalfHour(p.a.cloud, p.b.cloud) : p.a.cloud;
+      const cloud = cloudRaw == null ? 0 : Math.round(cloudRaw);
+      const windRaw = p.half ? lerpHalfHour(p.a.wind, p.b.wind) : p.a.wind;
+      const windSpeed = Math.round(windRaw ?? 0);
+      const dirRaw = p.half ? meanWindDir(p.a.dir, p.b.dir) : (p.a.dir ?? 0);
+      const windDeg = Math.round(((dirRaw % 360) + 360) % 360);
+      const isDay = (p.half ? (p.b.day ?? p.a.day) : p.a.day) === 0 ? false : true;
+      const snowRaw = p.half ? lerpHalfHour(p.a.snow, p.b.snow) : p.a.snow;
+      const snow = Math.round((snowRaw ?? 0) * 100) / 100;
+      const honest = honestSlotWeather(code, temp ?? 0, isDay ? 1 : 0, mm, rainProb ?? 0, cloud, snow);
+      const sunProb = isDay ? Math.max(0, Math.min(100, 100 - cloud)) : 0;
+      slots.push({
+        time: `${pad2(p.h)}:${pad2(p.m)}`,
+        temperature: temp,
+        condition: honest.condition,
+        icon: honest.icon,
+        weatherCode: honest.weatherCode,
+        windSpeed,
+        windDirection: degreesToCardinal(windDeg),
+        windDirDeg: windDeg,
+        beaufort: windSpeedToBeaufort(windSpeed),
+        rainProb,
+        sunProb,
+        precipMm: mm,
+        cloudCover: cloud,
+        isDay,
+      });
+    }
+  }
+  return slots;
+}
+
+function buildForecast14(data) {
+  const dates = data.daily?.time ?? [];
+  const codes = data.daily?.weathercode ?? [];
+  const highs = data.daily?.temperature_2m_max ?? [];
+  const lows = data.daily?.temperature_2m_min ?? [];
+  const feelsHighs = data.daily?.apparent_temperature_max ?? [];
+  const feelsLows = data.daily?.apparent_temperature_min ?? [];
+  const windMax = data.daily?.wind_speed_10m_max ?? [];
+  const windDir = data.daily?.wind_direction_10m_dominant ?? [];
+  const humidityMax = data.daily?.relative_humidity_2m_max ?? [];
+  const humidityMin = data.daily?.relative_humidity_2m_min ?? [];
+  const rainProb = data.daily?.precipitation_probability_max ?? [];
+  const precipSum = data.daily?.precipitation_sum ?? [];
+  // Mean cloud cover decides the honest fallback sky when a rain code meets a
+  // dry day. Open-Meteo changed the field name over time (cloudcover_mean →
+  // cloud_cover_mean), so accept both; without it the provider icon is kept.
+  const cloudMean = data.daily?.cloud_cover_mean ?? data.daily?.cloudcover_mean ?? [];
+
+  return dates.slice(0, FORECAST14_DAYS).map((date, index) => {
+    const mapped = honestDayWeather(
+      codes[index] ?? 0, highs[index], precipSum[index], rainProb[index], cloudMean[index]
+    );
+    const maxHum = humidityMax[index];
+    const minHum = humidityMin[index];
+    const humidity = maxHum != null && minHum != null
+      ? Math.round((maxHum + minHum) / 2)
+      : Math.round(maxHum ?? minHum ?? 0);
+    const windSpeed = Math.round(windMax[index] ?? 0);
+    const windDeg = typeof windDir[index] === 'number' && Number.isFinite(windDir[index])
+      ? Math.round(windDir[index]) % 360
+      : null;
+    const prob = rainProb[index];
+    const mm = precipSum[index];
+
+    return {
+      date,
+      day: formatDayLabel(date, index),
+      condition: mapped.condition,
+      icon: mapped.icon,
+      weatherCode: mapped.weatherCode ?? (codes[index] ?? 0),
+      high: highs[index] !== undefined && highs[index] !== null ? Math.round(highs[index]) : null,
+      low: lows[index] !== undefined && lows[index] !== null ? Math.round(lows[index]) : null,
+      feelsHigh: feelsHighs[index] !== undefined && feelsHighs[index] !== null ? Math.round(feelsHighs[index]) : null,
+      feelsLow: feelsLows[index] !== undefined && feelsLows[index] !== null ? Math.round(feelsLows[index]) : null,
+      humidity,
+      windSpeed,
+      windDirection: degreesToCardinal(windDir[index] ?? 0),
+      windDirDeg: windDeg,
+      beaufort: windSpeedToBeaufort(windSpeed),
+      // 💧 Chance of rain (0–100 %, highest probability of the day) and the
+      // total precipitation expected, in mm (1 decimal).
+      rainProb: prob != null ? Math.round(prob) : null,
+      precipMm: mm != null ? Math.round(mm * 10) / 10 : null,
+      // ⏱️ 48 half-hour slots for this day (00:00 … 23:30) with temperature,
+      // icon, wind (speed + direction + Beaufort) and rain/sunshine chances.
+      // Empty when the hourly series has no full 24 anchors for this date
+      // (never blocks the daily row — the row renders regardless).
+      hours: buildForecast14DaySlots(date, data.hourly)
+    };
+  });
+}
+
+// Daily + hourly Open-Meteo call for the 14-day tab. Cheap (daily summaries +
+// one hourly series for the ⏱️ 30-minute drill-down) and cached — refreshing
+// the page every 30 seconds hits the cache, not Open-Meteo. Retried once
+// after a short pause, because the same request fans out 25 concurrent 5×5
+// local-map cell calls that can trip a transient Open-Meteo rate limit.
+// Throws on failure; callers degrade gracefully.
+async function fetchDailyForecast14(latitude, longitude) {
+  // Cache key rounds to ~0.05° (≈ 5 km) — more than precise enough for a
+  // 14-day daily summary, and nearby users share cache entries.
+  const latKey = Math.round(latitude * 20) / 20;
+  const lonKey = Math.round(longitude * 20) / 20;
+  const cacheKey = `${latKey},${lonKey}`;
+  const cached = forecast14Cache.get(cacheKey);
+  if (cached && Date.now() - cached.at < FORECAST14_CACHE_TTL_MS) return cached.data;
+
+  const url =
+    `https://api.open-meteo.com/v1/forecast?latitude=${latitude}&longitude=${longitude}` +
+    '&daily=weathercode,temperature_2m_max,temperature_2m_min,apparent_temperature_max,apparent_temperature_min,' +
+    'precipitation_probability_max,precipitation_sum,wind_speed_10m_max,wind_direction_10m_dominant,' +
+    'relative_humidity_2m_max,relative_humidity_2m_min,cloud_cover_mean' +
+    '&hourly=temperature_2m,weather_code,precipitation,precipitation_probability,cloud_cover,' +
+    'wind_speed_10m,wind_direction_10m,is_day,snowfall' +
+    `&forecast_days=16&timezone=auto`;
+
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  let data;
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      const response = await fetch(url, { signal: AbortSignal.timeout(10000) });
+      if (!response.ok) throw new Error(`Open-Meteo 14-day daily HTTP ${response.status}`);
+      data = await response.json();
+      break;
+    } catch (error) {
+      if (attempt >= 1) throw error;
+      await sleep(800); // brief backoff, then one retry
+    }
+  }
+  const forecast14 = buildForecast14(data);
+  forecast14Cache.set(cacheKey, { at: Date.now(), data: forecast14 });
+  if (forecast14Cache.size > FORECAST14_CACHE_MAX) {
+    const firstKey = forecast14Cache.keys().next().value;
+    forecast14Cache.delete(firstKey);
+  }
+  return forecast14;
 }
 
 const NOWCAST_SLOT_MINUTES = 15;   // Open-Meteo minutely_15 resolution
@@ -317,6 +618,116 @@ function honestSnowCondition(code, tempC) {
   return { condition: 'Rain', icon: '🌧️' };
 }
 
+// ===== 🌤️ Honest daily sky: a day card may only claim precipitation when the
+// day as a whole really expects it — at least DAY_RAIN_MIN_MM mm of rain in
+// the day, or a DAY_RAIN_PROB_MIN % peak chance. WeatherAPI's daily "Patchy
+// rain nearby" (code 1063) is the offender: the provider stamps the *day
+// summary* with the worst hourly label, so today can read 🌧️ Rain even while
+// the sun shines and every 15-minute slot is dry. When the code and the amount
+// disagree, the amount wins and the day reads as the sky overhead — derived
+// from the day's own hours (average cloud cover) — exactly like the 15-minute
+// honestSlotWeather below, only with day-scale thresholds.
+//
+// ⚠️ Callers must pass real numbers: a day can only be cleared when its
+// precipitation total AND peak chance are both known; if either is missing
+// (undefined — Open-Meteo daily blocks do not always carry precipitation
+// fields), the provider's own icon is kept instead of guessing from cloud
+// cover alone (cloud_cover_mean is a flaky, sometimes-absent field).
+const DAY_RAIN_MIN_MM = 1;    // mm per day — less than this never lands
+const DAY_RAIN_PROB_MIN = 60; // % — the peak chance that already lights the 💧 badge
+// Daily cloud bands (mean daytime cloud cover): like the slot bands, only
+// coarser — a whole day hides the sun longer than one passing shower.
+const DAY_CLOUDY_COVER = 68;  // % mean cloud → overcast day
+const DAY_PARTLY_COVER = 32;  // % mean cloud → sun with clouds
+function honestDayWeather(code, tempHighC, precipMmDay, precipProbMax, cloudCoverDay) {
+  // Snow honesty first (unchanged): wet snow at 0…2 °C keeps ❄️, a snowy code
+  // in warm air is a model quirk and reads as rain.
+  const snowFix = honestSnowCondition(code, tempHighC);
+  const mapped = snowFix || mapWeatherCodeToCondition(code);
+  const result = { condition: mapped.condition, icon: mapped.icon, weatherCode: snowFix ? 61 : code };
+  // Bail out early when the evidence is incomplete: without BOTH the day's
+  // total millimetres and its peak chance, a wet code cannot be disproven —
+  // and without cloud cover there is no honest fallback sky either.
+  const hasAmount = typeof precipMmDay === 'number' && Number.isFinite(precipMmDay);
+  const hasChance = typeof precipProbMax === 'number' && Number.isFinite(precipProbMax);
+  const cover = typeof cloudCoverDay === 'number' && Number.isFinite(cloudCoverDay) ? cloudCoverDay : null;
+  if (cover == null || !hasAmount || !hasChance) return result;
+  const expected = precipMmDay >= DAY_RAIN_MIN_MM || precipProbMax >= DAY_RAIN_PROB_MIN;
+  const claimsWet = WET_CODES.has(code);
+  // Real rain expected but the code says "clear sky": the amount wins — the
+  // same mirror rule as honestSlotWeather.
+  if (expected && !claimsWet) return { condition: 'Showers', icon: '🌦️', weatherCode: 51 };
+  // Rain code, dry day: read the sky overhead from the day's own cloud cover.
+  // Cold-air snow is untouched (same exception as the 15-minute rule).
+  const coldSnow = SNOW_CODES.has(code) && !snowFix;
+  if (claimsWet && !expected && !coldSnow) {
+    if (cover >= DAY_CLOUDY_COVER) return { condition: 'Cloudy', icon: '☁️', weatherCode: 3 };
+    if (cover >= DAY_PARTLY_COVER) return { condition: 'Partly Cloudy', icon: '⛅', weatherCode: 2 };
+    return { condition: 'Clear', icon: '☀️', weatherCode: 0 };
+  }
+  return result;
+}
+
+// ===== 🌤️ Honest short-range sky: the icon must match what is falling =====
+// An icon may only claim precipitation when precipitation is really expected:
+// an amount from 0.1 mm per 15-minute slot up, or a ≥ 60 % chance — the same
+// rule the 💧 rain badge, the alert engine and the front-end sky strip
+// (LOCALMAP_PRECIP_PROB_PCT in index.html) already use. WeatherAPI's "Patchy
+// rain nearby" (code 1063) is the classic offender: the rain is in the
+// neighbourhood, the hour reports 0.01–0.03 mm and a 17 % chance, yet it used
+// to map to WMO 61 and paint 🌧️ on every 15-minute slot while the sun was
+// shining through the clouds. When the code and the amount disagree, the
+// amount wins and the sky that is really overhead (cloud cover) decides the
+// icon — exactly like the 🛰️ top-down map, which already refuses to paint rain
+// below its trace threshold.
+const SLOT_RAIN_MIN_MM = 0.1;      // mm per 15 min — less than this never lands
+const SLOT_RAIN_PROB_MIN = 60;     // % — the chance that already lights the 💧 badge
+const SLOT_CLOUDY_COVER = 80;      // % cloud cover → overcast
+const SLOT_PARTLY_COVER = 40;      // % cloud cover → sun with clouds (same split as the 🛰️ map)
+// WMO codes whose icon claims precipitation is falling right now.
+const WET_CODES = new Set([51, 53, 55, 56, 57, 61, 63, 65, 66, 67, 71, 73, 75, 77, 80, 81, 82, 85, 86, 95, 96, 99]);
+
+// Returns { condition, icon, weatherCode } for one short-range slot (15-minute
+// nowcast step, local-map cell or "now"), with icon and code always agreeing —
+// the front end prefers the code over the text when it re-derives an icon.
+// precipMm is the amount in the 0.1 mm step the UI shows, so "0.1 mm" on screen
+// and a rain icon always come together. snowfall is the slot's snowfall in cm —
+// it counts as precipitation too, so snow that is really falling is never hidden.
+function honestSlotWeather(code, tempC, isDay, precipMm, precipProb, cloudCover, snowfall) {
+  // Snow honesty first (unchanged): wet snow at 0…2 °C keeps ❄️, a snowy code
+  // in warm air is a model quirk and reads as rain.
+  const snowFix = honestSnowCondition(code, tempC);
+  const mapped = snowFix || mapWeatherCodeToCondition(code, isDay);
+  const result = { condition: mapped.condition, icon: mapped.icon, weatherCode: snowFix ? 61 : code };
+  const expected = (typeof precipMm === 'number' && precipMm >= SLOT_RAIN_MIN_MM)
+    || (typeof snowfall === 'number' && snowfall > 0)
+    || (typeof precipProb === 'number' && precipProb >= SLOT_RAIN_PROB_MIN);
+  const claimsWet = WET_CODES.has(code);
+
+  // Precipitation is expected but the code says "clear sky": the amount wins —
+  // a sunny slot in the middle of a shower would be just as wrong.
+  if (expected && !claimsWet) return { condition: 'Showers', icon: '🌦️', weatherCode: 51 };
+
+  // The code claims rain / snow but nothing is expected to land: show the sky
+  // that is really overhead instead of rain while the sun shines through.
+  // Exception — real snow in freezing air: providers routinely report 0 mm for
+  // snowfall (WeatherAPI hourly precip_mm), and snow at −3 °C is no quibble, so
+  // a snowy code in cold air keeps ❄️. Warm-air "snow" was already turned into
+  // rain above, and that one is still judged by its amount.
+  const coldSnow = SNOW_CODES.has(code) && !snowFix;
+  if (claimsWet && !expected && !coldSnow) {
+    const cover = typeof cloudCover === 'number' && Number.isFinite(cloudCover) ? cloudCover : null;
+    if (cover == null) return result; // no cloud data → keep the provider's own icon
+    if (cover >= SLOT_CLOUDY_COVER) return { condition: 'Cloudy', icon: '☁️', weatherCode: 3 };
+    if (cover >= SLOT_PARTLY_COVER) return { condition: 'Partly Cloudy', icon: '⛅', weatherCode: 2 };
+    return isDay === false
+      ? { condition: 'Clear Night', icon: '🌙', weatherCode: 0 }
+      : { condition: 'Clear', icon: '☀️', weatherCode: 0 };
+  }
+
+  return result;
+}
+
 // Build a machine-readable list of active weather alerts for the next 3 hours.
 // `timeline` is the array of 15-minute slots from buildNowcast().
 function buildAlerts(timeline) {
@@ -329,7 +740,9 @@ function buildAlerts(timeline) {
   const windFound = maxWindKmh >= STRONG_WIND_ALERT_KMH; // > 28 km/h ⇒ above Beaufort 4
 
   if (rainFound) alerts.push({ type: 'rain', label: 'Rain', emoji: '🌧️' });
-  if (hailFound) alerts.push({ type: 'hail', label: 'Hail', emoji: '🌨️' });
+  // 🧊 Same hail icon as the front end's nowcast badge, the 🛰️ map, its legend
+  // chip and the icon reference table — hail is never 🌨️ (that is freezing rain).
+  if (hailFound) alerts.push({ type: 'hail', label: 'Hail', emoji: '🧊' });
   if (snowFound) alerts.push({ type: 'snow', label: 'Snow', emoji: '❄️' });
   if (windFound) alerts.push({
     type: 'strongWind',
@@ -423,15 +836,31 @@ function buildNowcast(data) {
   const timeline = slices.map((time, i) => {
     const code = m15.weather_code?.[i] ?? 0;
     const slotTemp = Math.round(m15.temperature_2m?.[i] ?? 0);
-    const mapped = honestSnowCondition(code, slotTemp) || mapWeatherCodeToCondition(code);
-    const precipMmRaw = m15.precipitation?.[i] ?? 0;
+    // is_day: 1 = day, 0 = night. Missing data counts as DAY (same default as
+    // every other is_day read in this file) — a wrong moon in daylight would
+    // be worse than a sun in unknown conditions.
+    const isDay = (m15.is_day?.[i] ?? 1) === 1;
+    // 🌙 Clear sky at night shows the moon — the sun cannot shine after dark.
+    // 🌤️ And an icon only claims rain / snow when something is really expected
+    // to land (honestSlotWeather): "rain nearby" with 0.03 mm and a 17 % chance
+    // must not paint 🌧️ on all twelve 15-minute slots. The amount used is the
+    // one shown to the user (0.1 mm steps), so the 💧 value and the icon always
+    // tell the same story.
+    const precipMm = Math.round((m15.precipitation?.[i] ?? 0) * 10) / 10;
+    let precipProb = Math.round(m15.precipitation_probability?.[i] ?? 0);
+    const cloudCover = m15.cloud_cover?.[i];
+    // 🌙 the honest sky can now flip a slot to "Clear Night" (weatherCode 0),
+    // so give the front end a matching overnight chance: a dry, ≤ 40 %-cloud
+    // slot stays dry in the evening but gets an honest 0 % chance after dark.
+    if (isDay === false && precipProb >= SLOT_RAIN_PROB_MIN && precipMm < SLOT_RAIN_MIN_MM) {
+      if (typeof cloudCover === 'number' && cloudCover < SLOT_PARTLY_COVER) precipProb = 0;
+    }
+    const mapped = honestSlotWeather(code, slotTemp, isDay, precipMm, precipProb, cloudCover, m15.snowfall?.[i]);
     // SUN % (shown with the sun icon in the 15-minute slots): how much the sun
     // is actually shining. Clear sky (sun fully visible) -> 100%, clouds block
     // the sun -> lower %, night -> 0%. Cloud cover is the direct measure of
     // "is the sun visible"; the raw WHO UV index is kept for the tooltip.
     const uvIndex = Math.round((m15.uv_index?.[i] ?? 0) * 10) / 10;
-    const isDay = (m15.is_day?.[i] ?? 0) === 1;
-    const cloudCover = m15.cloud_cover?.[i];
     const uvClearSky = m15.uv_index_clear_sky?.[i] ?? 0;
     let uvPct;
     if (!isDay) {
@@ -448,12 +877,13 @@ function buildNowcast(data) {
       label: String(time).slice(11, 16), // "HH:MM"
       condition: mapped.condition,
       icon: mapped.icon,
-      weatherCode: code,
+      weatherCode: mapped.weatherCode ?? code,
       cloudCover: Math.round(cloudCover ?? 0),
+      isDay,
       temperature: slotTemp,
       feelsLike: Math.round(m15.apparent_temperature?.[i] ?? m15.temperature_2m?.[i] ?? 0),
-      precipMm: Math.round(precipMmRaw * 10) / 10,
-      precipProb: Math.round(m15.precipitation_probability?.[i] ?? 0),
+      precipMm,
+      precipProb,
       windKmh: Math.round(m15.wind_speed_10m?.[i] ?? 0),
       uvIndex,
       uvPct,
@@ -473,7 +903,9 @@ function buildNowcast(data) {
       hasRain: alertInfo.summary.hasRain,
       hasHail: alertInfo.summary.hasHail,
       hasSnow: alertInfo.summary.hasSnow,
-      hasSun: timeline.some((slot) => slot.weatherCode === 0 || slot.weatherCode === 1),
+      // ☀️ Sun badge: only when a clear slot is actually in daylight — the sun
+      // does not shine at night, so a starry clear sky must not light it up.
+      hasSun: timeline.some((slot) => (slot.weatherCode === 0 || slot.weatherCode === 1) && slot.isDay !== false),
       strongWind: maxWindKmh >= STRONG_WIND_KMH,
       strongWindAbove4: alertInfo.summary.strongWindAbove4,
       totalPrecipMm,
@@ -520,8 +952,8 @@ function classifyLocalCell(code, precipitation, snowfall, cloudCover) {
 async function fetchLocalCell(latitude, longitude) {
   const url =
     `https://api.open-meteo.com/v1/forecast?latitude=${latitude}&longitude=${longitude}` +
-    '&current=temperature_2m,apparent_temperature,weather_code,precipitation,snowfall,cloud_cover,wind_speed_10m,wind_direction_10m' +
-    '&minutely_15=temperature_2m,apparent_temperature,weather_code,precipitation,precipitation_probability,cloud_cover,snowfall,wind_speed_10m,wind_direction_10m' +
+    '&current=temperature_2m,apparent_temperature,weather_code,precipitation,snowfall,cloud_cover,wind_speed_10m,wind_direction_10m,is_day' +
+    '&minutely_15=temperature_2m,apparent_temperature,weather_code,precipitation,precipitation_probability,cloud_cover,snowfall,wind_speed_10m,wind_direction_10m,is_day' +
     `&forecast_minutely_15=${LOCAL_MAP_SLOTS}&timezone=auto`;
   const response = await fetch(url, { signal: AbortSignal.timeout(7000) });
   if (!response.ok) throw new Error(`Local cell HTTP ${response.status}`);
@@ -535,30 +967,45 @@ async function fetchLocalCell(latitude, longitude) {
   const windSpeed = Math.round(current.wind_speed_10m ?? 0);
   const windDirection = Math.round(current.wind_direction_10m ?? 0);
   const temp = Math.round(current.temperature_2m ?? 0);
-  let mapped = mapWeatherCodeToCondition(weatherCode);
-  let type = classifyLocalCell(weatherCode, precipitation, snowfall, cloudCover);
-  // Snow honesty: snow cannot fall well above freezing — a snowy code or
-  // snowfall amount at warm temperatures is a model quirk, so the cell reads
-  // as rain (icon AND map-blob type agree with the temperature, matching the
-  // SNOW_TOO_WARM_C guard in index.html's localMapFrameCell).
-  if (temp > SNOW_TOO_WARM_C && (SNOW_CODES.has(weatherCode) || snowfall > 0)) {
-    mapped = { condition: 'Rain', icon: '🌧️' };
-    type = classifyLocalCell(63, precipitation, 0, cloudCover);
-  }
+  let mapped = honestSlotWeather(weatherCode, temp, (current.is_day ?? 1) === 1, precipitation, null, cloudCover, snowfall);
+  // 🌙 Clear sky at night shows the moon on the top-down map as well — the sun
+  // cannot shine after dark (classifyLocalCell still returns the same 'clear'
+  // type, so nothing is painted, only the icon changes).
+  // 🌤️ The blob type is derived from the HONEST code (honestSlotWeather), so
+  // the painted blob always matches the icon: a "rain nearby" cell with a
+  // trace amount gets the faint drizzle haze the amount deserves instead of a
+  // vivid rain blob over a sunlit landscape, while snow that is really falling
+  // (snowfall > 0) keeps its rain/snow blob — honestSlotWeather already folds
+  // warm-air snow (SNOW_TOO_WARM_C) into code 61 rain.
+  // Snow honesty: only a HONEST snow code paints snow, so warm-air snow (code
+  // 73 at 17 °C, folded into rain by honestSlotWeather) cannot leave a white
+  // snow blob under a rain icon (matching the front-end localMapFrameCell).
+  const typeSnow = SNOW_CODES.has(mapped.weatherCode) ? snowfall : 0;
+  let type = classifyLocalCell(mapped.weatherCode, precipitation, typeSnow, cloudCover);
 
   // Compact 15-minute forecast series (0…180 min) so the front end can show
   // every cell of the radar moving forward in time. Stored as parallel arrays
   // (not objects) to keep the JSON payload small for 25 cells × 13 slots.
   const slotCount = Math.min(LOCAL_MAP_SLOTS, Array.isArray(m15.time) ? m15.time.length : 0);
-  const series = { times: [], codes: [], precip: [], prob: [], cloud: [], snow: [], temps: [], feels: [], wind: [], windDir: [] };
+  const series = { times: [], codes: [], day: [], precip: [], prob: [], cloud: [], snow: [], temps: [], feels: [], wind: [], windDir: [] };
   for (let i = 0; i < slotCount; i += 1) {
+    const slotCode = m15.weather_code?.[i] ?? 0;
+    const slotTemp = Math.round(m15.temperature_2m?.[i] ?? 0);
+    const slotIsDay = (m15.is_day?.[i] ?? 1) === 1;
+    const slotPrecip = Math.round((m15.precipitation?.[i] ?? 0) * 10) / 10;
+    const slotProb = Math.round(m15.precipitation_probability?.[i] ?? 0);
+    const slotCloud = Math.round(m15.cloud_cover?.[i] ?? 0);
+    // 🌤️ The stored code is the HONEST code (honestSlotWeather), so the future
+    // frames of this cell — which the front end turns into icons and blob types
+    // straight from these codes — cannot show rain over a sunlit cell either.
     series.times.push(m15.time[i] || '');
-    series.codes.push(m15.weather_code?.[i] ?? 0);
-    series.precip.push(Math.round((m15.precipitation?.[i] ?? 0) * 10) / 10);
-    series.prob.push(Math.round(m15.precipitation_probability?.[i] ?? 0));
-    series.cloud.push(Math.round(m15.cloud_cover?.[i] ?? 0));
+    series.codes.push(honestSlotWeather(slotCode, slotTemp, slotIsDay, slotPrecip, slotProb, slotCloud, m15.snowfall?.[i]).weatherCode);
+    series.day.push(m15.is_day?.[i] ?? 1);
+    series.precip.push(slotPrecip);
+    series.prob.push(slotProb);
+    series.cloud.push(slotCloud);
     series.snow.push(Math.round((m15.snowfall?.[i] ?? 0) * 10) / 10);
-    series.temps.push(Math.round(m15.temperature_2m?.[i] ?? 0));
+    series.temps.push(slotTemp);
     series.feels.push(Math.round(m15.apparent_temperature?.[i] ?? m15.temperature_2m?.[i] ?? 0));
     series.wind.push(Math.round(m15.wind_speed_10m?.[i] ?? 0));
     series.windDir.push(Math.round(m15.wind_direction_10m?.[i] ?? 0));
@@ -570,7 +1017,7 @@ async function fetchLocalCell(latitude, longitude) {
     type,
     condition: mapped.condition,
     icon: mapped.icon,
-    weatherCode,
+    weatherCode: mapped.weatherCode ?? weatherCode,
     temp,
     feels: Math.round(current.apparent_temperature ?? current.temperature_2m ?? 0),
     precipitation,
@@ -747,6 +1194,9 @@ function buildPrediction(condition, temperature, humidity) {
   }
   if (normalized.includes('cloud') || normalized.includes('mist') || normalized.includes('fog')) {
     return 'Cloudy skies are expected, with lingering haze and comfortable temperatures.';
+  }
+  if (normalized.includes('clear night')) {
+    return 'Clear starry night — the moon and stars are out with no clouds in the way.';
   }
   if (normalized.includes('clear') || normalized.includes('sun')) {
     return 'Bright and mostly clear weather is expected today.';
@@ -933,11 +1383,14 @@ async function fetchWeatherData(location) {
 
   // Shared side-data for both providers: the 5×5 top-down local map (built
   // from Open-Meteo minutely_15 — WeatherAPI's free plan has no 15-minute
-  // data or grid) and the nearby city/village names (Wikipedia geosearch).
-  // Both are cached server-side, so refreshing the page costs nothing extra.
-  const [localMap, nearbyPlaces] = await Promise.all([
+  // data or grid), the nearby city/village names (Wikipedia geosearch) and
+  // the 📅 14-day daily forecast (also Open-Meteo — WeatherAPI's free plan
+  // caps at 3 days). All three are cached server-side, so refreshing the
+  // page costs nothing extra.
+  const [localMap, nearbyPlaces, dailyForecast14] = await Promise.all([
     buildLocalMap(geocoded.latitude, geocoded.longitude).catch(() => ({ cells: [] })),
-    getNearbyPlaces(geocoded.latitude, geocoded.longitude).catch(() => [])
+    getNearbyPlaces(geocoded.latitude, geocoded.longitude).catch(() => []),
+    fetchDailyForecast14(geocoded.latitude, geocoded.longitude).catch(() => [])
   ]);
 
   // Provider routing: WeatherAPI.com first when WEATHERAPI_KEY is set, with
@@ -945,13 +1398,13 @@ async function fetchWeatherData(location) {
   if (isWeatherApiEnabled()) {
     try {
       const wapi = await fetchWeatherApiWeather(geocoded);
-      return { ...wapi, localMap, nearbyPlaces };
+      return { ...wapi, localMap, nearbyPlaces, forecast14: dailyForecast14 };
     } catch (error) {
       console.warn('WeatherAPI.com fetch failed, falling back to Open-Meteo.', error);
     }
   }
 
-  return fetchOpenMeteoWeather(geocoded, localMap, nearbyPlaces);
+  return fetchOpenMeteoWeather(geocoded, localMap, nearbyPlaces, dailyForecast14);
 }
 
 // ===== Provider 1: WeatherAPI.com (keyed) ==============================
@@ -978,22 +1431,53 @@ async function fetchWeatherApiWeather(geocoded) {
   const windDirection = current.wind_dir || degreesToCardinal(current.wind_degree ?? 0);
   const feelsLike = Math.round(current.feelslike_c ?? temperature);
   const currentWmo = mapWapiCodeToWmo(current.condition?.code ?? 1000);
-  const mapped = honestSnowCondition(currentWmo, temperature) || mapWeatherCodeToCondition(currentWmo);
+  const isDayNow = (current.is_day ?? 1) === 1;
+  // Clear sky at night shows the moon (the sun cannot shine after dark) and the
+  // hero icon obeys the same honesty rule as the 15-minute slots
+  // (honestSlotWeather): WeatherAPI's "Patchy rain nearby" reports 0.03 mm and
+  // a 17 % chance, so the sky that is really overhead wins over the rain code.
+  // WeatherAPI has no snowfall variable: chance_of_snow carries the snow
+  // expectation, so the honest rule uses the larger of the two chances.
+  const mapped = honestSlotWeather(
+    currentWmo, temperature, isDayNow,
+    Math.round((current.precip_mm ?? 0) * 10) / 10,
+    Math.max(current.chance_of_rain ?? 0, current.chance_of_snow ?? 0),
+    current.cloud ?? 0
+  );
 
-  // 3-day forecast (Today / Tomorrow / Day After).
+  // 3-day forecast (Today / Tomorrow / Day After). The day summary code is the
+  // provider's worst-hour label, so it gets the same honesty rule as the
+  // 15-minute slots, only with day-scale thresholds: WeatherAPI's daily
+  // "Patchy rain nearby" stamps today 🌧️ Rain on 0.51 mm / 45 % while the sun
+  // shines. A day only keeps a rain icon on real rain (≥ 1 mm in the day or a
+  // ≥ 60 % peak chance); a dry "rain" day reads as the sky overhead, averaged
+  // from the day's own daytime hours.
   const forecast = forecastDays.slice(0, 3).map((day, index) => {
     const dayWmo = mapWapiCodeToWmo(day.day?.condition?.code ?? 1000);
-    const dayMapped = honestSnowCondition(dayWmo, day.day?.maxtemp_c) || mapWeatherCodeToCondition(dayWmo);
     // The day summary has no dominant wind direction, so borrow it from the
     // midday hour (or the first hour of that day).
     const hours = Array.isArray(day.hour) ? day.hour : [];
     const midday = hours.find((h) => String(h.time || '').endsWith('12:00')) || hours[0] || {};
+    // Only the daytime hours decide the fallback sky: a dry day with sunshine
+    // between cloudy mornings and evenings is still a sun-with-clouds day.
+    const dayHours = hours.filter((h) => h.is_day === 1);
+    const dayCloud = dayHours.length
+      ? dayHours.reduce((sum, h) => sum + (h.cloud ?? 0), 0) / dayHours.length
+      : hours.length
+        ? hours.reduce((sum, h) => sum + (h.cloud ?? 0), 0) / hours.length
+        : null;
+    const dayPeakChance = hours.length
+      ? Math.max(...hours.map((h) => Math.max(h.chance_of_rain ?? 0, h.chance_of_snow ?? 0)))
+      : (day.day?.daily_chance_of_rain ?? 0);
+    const dayMapped = honestDayWeather(
+      dayWmo, day.day?.maxtemp_c, day.day?.totalprecip_mm, dayPeakChance, dayCloud
+    );
     const windSpeedDay = Math.round(day.day?.maxwind_kph ?? 0);
     return {
       day: formatDayLabel(day.date, index),
       condition: dayMapped.condition,
       icon: dayMapped.icon,
-      weatherCode: dayWmo,
+      weatherCode: dayMapped.weatherCode ?? dayWmo,
       high: day.day?.maxtemp_c != null ? Math.round(day.day.maxtemp_c) : null,
       low: day.day?.mintemp_c != null ? Math.round(day.day.mintemp_c) : null,
       humidity: Math.round(day.day?.avghumidity ?? 0),
@@ -1019,7 +1503,9 @@ async function fetchWeatherApiWeather(geocoded) {
       hasRain: alertInfo.summary.hasRain,
       hasHail: alertInfo.summary.hasHail,
       hasSnow: alertInfo.summary.hasSnow,
-      hasSun: timeline.some((slot) => slot.weatherCode === 0 || slot.weatherCode === 1),
+      // ☀️ Sun badge: only when a clear slot is actually in daylight — the sun
+      // does not shine at night, so a starry clear sky must not light it up.
+      hasSun: timeline.some((slot) => (slot.weatherCode === 0 || slot.weatherCode === 1) && slot.isDay !== false),
       strongWind: maxWindKmh >= STRONG_WIND_KMH,
       strongWindAbove4: alertInfo.summary.strongWindAbove4,
       totalPrecipMm,
@@ -1047,7 +1533,8 @@ async function fetchWeatherApiWeather(geocoded) {
     beaufort: windSpeedToBeaufort(windSpeed),
     condition: mapped.condition,
     icon: mapped.icon,
-    weatherCode: currentWmo,
+    weatherCode: mapped.weatherCode ?? currentWmo,
+    isDay: isDayNow,
     provider: 'weatherapi',
     latitude: location.lat ?? geocoded.latitude,
     longitude: location.lon ?? geocoded.longitude,
@@ -1059,8 +1546,8 @@ async function fetchWeatherApiWeather(geocoded) {
 }
 
 // ===== Provider 2: Open-Meteo (keyless fallback) =======================
-async function fetchOpenMeteoWeather(geocoded, localMap, nearbyPlaces) {
-  const url = `https://api.open-meteo.com/v1/forecast?latitude=${geocoded.latitude}&longitude=${geocoded.longitude}&current=temperature_2m,apparent_temperature,relative_humidity_2m,wind_speed_10m,wind_direction_10m,weather_code&minutely_15=temperature_2m,apparent_temperature,weather_code,precipitation,precipitation_probability,wind_speed_10m,wind_direction_10m,uv_index,uv_index_clear_sky,cloud_cover,is_day&forecast_minutely_15=${NOWCAST_SLOTS}&daily=weathercode,temperature_2m_max,temperature_2m_min,apparent_temperature_max,apparent_temperature_min,wind_speed_10m_max,wind_direction_10m_dominant,relative_humidity_2m_max,relative_humidity_2m_min&timezone=auto`;
+async function fetchOpenMeteoWeather(geocoded, localMap, nearbyPlaces, dailyForecast14) {
+  const url = `https://api.open-meteo.com/v1/forecast?latitude=${geocoded.latitude}&longitude=${geocoded.longitude}&current=temperature_2m,apparent_temperature,relative_humidity_2m,wind_speed_10m,wind_direction_10m,weather_code,is_day,precipitation,precipitation_probability,cloud_cover,snowfall&minutely_15=temperature_2m,apparent_temperature,weather_code,precipitation,precipitation_probability,snowfall,wind_speed_10m,wind_direction_10m,uv_index,uv_index_clear_sky,cloud_cover,is_day&forecast_minutely_15=${NOWCAST_SLOTS}&daily=weathercode,temperature_2m_max,temperature_2m_min,apparent_temperature_max,apparent_temperature_min,wind_speed_10m_max,wind_direction_10m_dominant,relative_humidity_2m_max,relative_humidity_2m_min,precipitation_sum,precipitation_probability_max,cloud_cover_mean&timezone=auto`;
 
   const response = await fetch(url, { signal: AbortSignal.timeout(10000) });
   if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -1068,7 +1555,16 @@ async function fetchOpenMeteoWeather(geocoded, localMap, nearbyPlaces) {
   const data = await response.json();
   const current = data.current ?? {};
   const temperature = Math.round(current.temperature_2m ?? 0);
-  const mapped = honestSnowCondition(current.weather_code ?? 0, temperature) || mapWeatherCodeToCondition(current.weather_code ?? 0);
+  const isDayNow = (current.is_day ?? 1) === 1;
+  // Clear sky at night shows the moon (the sun cannot shine after dark) and the
+  // hero icon obeys the same honesty rule as the 15-minute slots
+  // (honestSlotWeather): a rain code with no amount and no real chance reads as
+  // the sky that is really overhead, never as rain over a sunlit cell.
+  const mapped = honestSlotWeather(
+    current.weather_code ?? 0, temperature, isDayNow,
+    Math.round((current.precipitation ?? 0) * 10) / 10, current.precipitation_probability, current.cloud_cover ?? 0,
+    current.snowfall
+  );
   const humidity = Math.round(current.relative_humidity_2m ?? 0);
   const windSpeed = Math.round(current.wind_speed_10m ?? 0);
   const windDirection = degreesToCardinal(current.wind_direction_10m ?? 0);
@@ -1082,12 +1578,14 @@ async function fetchOpenMeteoWeather(geocoded, localMap, nearbyPlaces) {
     beaufort: windSpeedToBeaufort(windSpeed),
     condition: mapped.condition,
     icon: mapped.icon,
-    weatherCode: current.weather_code ?? 0,
+    weatherCode: mapped.weatherCode ?? (current.weather_code ?? 0),
+    isDay: isDayNow,
     provider: 'open-meteo',
     latitude: geocoded.latitude,
     longitude: geocoded.longitude,
     location: geocoded.name,
     forecast: buildForecast(data),
+    forecast14: dailyForecast14 ?? [],
     prediction: buildPrediction(mapped.condition, temperature, humidity),
     nowcast: buildNowcast(data),
     localMap,
@@ -1166,6 +1664,7 @@ module.exports = async function handler(req, res) {
         summary: { hasRain: false, hasHail: false, hasSnow: false, hasSun: false, strongWind: false, strongWindAbove4: false, totalPrecipMm: 0, maxWindKmh: 0, maxBeaufort: 0, trigger: false },
         note: 'Live minute-by-minute forecast is temporarily unavailable.'
       },
+      forecast14: [],
       localMap: { cells: [] },
       nearbyPlaces: []
     }));
@@ -1179,4 +1678,4 @@ module.exports.buildAlerts = buildAlerts;
 module.exports.checkAlertsForCoords = checkAlertsForCoords;
 module.exports.windSpeedToBeaufort = windSpeedToBeaufort;
 // Internal helpers (for tests / debugging): WeatherAPI.com provider pieces.
-module.exports._internal = { buildWapiTimeline, mapWapiCodeToWmo, classifyLocalCell };
+module.exports._internal = { buildWapiTimeline, mapWapiCodeToWmo, classifyLocalCell, mapWeatherCodeToCondition, buildNowcast, buildForecast14, buildForecast, buildForecast14DaySlots, meanWindDir, lerpHalfHour, pickHalfHourCode, fetchDailyForecast14, honestSlotWeather, honestDayWeather, SLOT_RAIN_MIN_MM, SLOT_RAIN_PROB_MIN, DAY_RAIN_MIN_MM, DAY_RAIN_PROB_MIN, FORECAST14_SLOTS_PER_DAY };

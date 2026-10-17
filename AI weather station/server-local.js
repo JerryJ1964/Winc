@@ -36,6 +36,10 @@ const PORT = Number(process.env.PORT || 3000);
 const weatherHandler = require('./api/weather.js');
 const pushHandler = require('./api/push.js');
 const nhcHandler = require('./api/nhc.js');
+const earthquakeHandler = require('./api/earthquake.js');
+const tsunamiHandler = require('./api/tsunami.js');
+const volcanoHandler = require('./api/volcano.js');
+const firesHandler = require('./api/fires.js');
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -100,6 +104,26 @@ const server = http.createServer(async (req, res) => {
 
     if (pathname === '/api/nhc') {
       await nhcHandler(makeApiReq(req), makeApiRes(res));
+      return;
+    }
+
+    if (pathname === '/api/earthquake') {
+      await earthquakeHandler(makeApiReq(req), makeApiRes(res));
+      return;
+    }
+
+    if (pathname === '/api/tsunami') {
+      await tsunamiHandler(makeApiReq(req), makeApiRes(res));
+      return;
+    }
+
+    if (pathname === '/api/volcano') {
+      await volcanoHandler(makeApiReq(req), makeApiRes(res));
+      return;
+    }
+
+    if (pathname === '/api/fires') {
+      await firesHandler(makeApiReq(req), makeApiRes(res));
       return;
     }
 

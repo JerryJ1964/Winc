@@ -79,3 +79,178 @@ test('checkAlertsForCoords hits Open-Meteo (live, best-effort)', async (t) => {
   assert.ok(result && typeof result.summary.trigger === 'boolean');
   assert.ok(Array.isArray(result.alerts));
 });
+
+test('clear sky at night shows the moon 🌙 — the sun cannot shine after dark', () => {
+  const map = weather._internal.mapWeatherCodeToCondition;
+  // Day (or an unknown time of day) keeps the classic sun icons.
+  assert.deepStrictEqual(map(0), { condition: 'Clear', icon: '☀️' });
+  assert.deepStrictEqual(map(0, true), { condition: 'Clear', icon: '☀️' });
+  assert.deepStrictEqual(map(1, true), { condition: 'Mainly Clear', icon: '🌤️' });
+  // Night: no clouds → stars visible → moon icon ("Clear Night").
+  assert.deepStrictEqual(map(0, false), { condition: 'Clear Night', icon: '🌙' });
+  assert.deepStrictEqual(map(1, false), { condition: 'Mainly Clear', icon: '🌙' });
+  // Every other condition keeps its icon at night.
+  assert.deepStrictEqual(map(61, false), { condition: 'Rain', icon: '🌧️' });
+  assert.deepStrictEqual(map(3, false), { condition: 'Cloudy', icon: '☁️' });
+  assert.deepStrictEqual(map(71, false), { condition: 'Snow', icon: '❄️' });
+});
+
+test('nowcast: clear night slots show 🌙 and the "Sun" badge stays dark', () => {
+  const hours = ['2026-09-14T22:00', '2026-09-14T22:15', '2026-09-14T22:30'];
+  const night = weather._internal.buildNowcast({
+    minutely_15: {
+      time: hours,
+      weather_code: [0, 1, 61],
+      temperature_2m: [12, 12, 11],
+      apparent_temperature: [11, 11, 10],
+      precipitation: [0, 0, 0.4],
+      precipitation_probability: [0, 0, 70],
+      wind_speed_10m: [5, 5, 8],
+      wind_direction_10m: [180, 180, 190],
+      uv_index: [0, 0, 0],
+      cloud_cover: [0, 5, 90],
+      is_day: [0, 0, 0]
+    }
+  });
+  assert.deepStrictEqual(
+    night.timeline.map((s) => `${s.condition} ${s.icon}`),
+    ['Clear Night 🌙', 'Mainly Clear 🌙', 'Rain 🌧️'],
+    'clear/mainly-clear slots at night must show the moon'
+  );
+  assert.strictEqual(night.timeline.every((s) => s.isDay === false), true);
+  assert.strictEqual(night.summary.hasSun, false, 'the sun does not shine at night');
+
+  // The very same clear slots in daylight keep ☀️/🌤️ and light the Sun badge.
+  const day = weather._internal.buildNowcast({
+    minutely_15: {
+      time: hours,
+      weather_code: [0, 1, 61],
+      temperature_2m: [18, 18, 17],
+      apparent_temperature: [17, 17, 16],
+      precipitation: [0, 0, 0.4],
+      precipitation_probability: [0, 0, 70],
+      wind_speed_10m: [5, 5, 8],
+      wind_direction_10m: [180, 180, 190],
+      uv_index: [3, 3, 2],
+      cloud_cover: [0, 5, 90],
+      is_day: [1, 1, 1]
+    }
+  });
+  assert.deepStrictEqual(
+    day.timeline.map((s) => s.icon),
+    ['☀️', '🌤️', '🌧️']
+  );
+  assert.strictEqual(day.summary.hasSun, true);
+
+  // Slots without any is_day flag (older payloads) keep the old behaviour.
+  const unknown = weather._internal.buildNowcast({
+    minutely_15: {
+      time: hours,
+      weather_code: [0, 0, 0],
+      temperature_2m: [18, 18, 18],
+      precipitation: [0, 0, 0],
+      precipitation_probability: [0, 0, 0],
+      wind_speed_10m: [5, 5, 5]
+    }
+  });
+  assert.strictEqual(unknown.summary.hasSun, true);
+});
+
+// ===== 📅 14-day forecast (buildForecast14) =============================
+test('14-day forecast: labels, rounding, wind direction, Beaufort, rain chance', () => {
+  const build = weather._internal.buildForecast14;
+  const dates = ['2026-09-15', '2026-09-16', '2026-09-17'];
+  const daily = {
+    time: dates,
+    weathercode: [61, 71, 0],
+    temperature_2m_max: [23.4, 2.9, 19],
+    temperature_2m_min: [17.6, -1.2, 8],
+    apparent_temperature_max: [22, 0, 18],
+    apparent_temperature_min: [16, -4, 6],
+    wind_speed_10m_max: [16.6, 34, 7],
+    wind_direction_10m_dominant: [225, 10, 359],
+    relative_humidity_2m_max: [90, 80, 60],
+    relative_humidity_2m_min: [60, 55, 40],
+    precipitation_probability_max: [41, 85, null],
+    precipitation_sum: [0.44, 12.34, 0]
+  };
+
+  const days = build({ daily });
+  assert.strictEqual(days.length, 3, 'short payloads return only the days present');
+  assert.deepStrictEqual(days.map((d) => d.day), ['Today', 'Tomorrow', 'Thu'], 'labels: Today / Tomorrow / weekday');
+
+  const [d0, d1, d2] = days;
+  // Max / min temperature: rounded to whole degrees.
+  assert.strictEqual(d0.high, 23);
+  assert.strictEqual(d0.low, 18);
+  // Wind: rounded km/h + dominant direction as a compass point + Beaufort.
+  assert.strictEqual(d0.windSpeed, 17);
+  assert.strictEqual(d0.windDirection, 'SW');
+  assert.strictEqual(d0.windDirDeg, 225);
+  assert.strictEqual(d0.beaufort, 3);
+  // Chance of rain as an integer % + precipitation in mm (1 decimal).
+  assert.strictEqual(d0.rainProb, 41);
+  assert.strictEqual(d0.precipMm, 0.4);
+  // Feels-like range and averaged humidity are carried for the stat cards.
+  assert.strictEqual(d0.feelsHigh, 22);
+  assert.strictEqual(d0.feelsLow, 16);
+  assert.strictEqual(d0.humidity, 75);
+  // 359° wraps to the last compass point, not 360.
+  assert.strictEqual(d2.windDirection, 'N');
+  // A missing rain-probability value degrades to null (the tab shows "—").
+  assert.strictEqual(d2.rainProb, null);
+  assert.strictEqual(d2.precipMm, 0);
+
+  // Snow honesty: a snowy code (71) on a day whose HIGH is above 2 °C is
+  // reported as rain so the icon matches the temperature.
+  assert.strictEqual(d1.condition, 'Rain');
+  assert.strictEqual(d1.icon, '🌧️');
+});
+
+test('14-day forecast: at most 14 days are returned from a longer payload', () => {
+  const dates = Array.from({ length: 20 }, (_, i) => `2026-09-${String(1 + i).padStart(2, '0')}`);
+  const daily = { time: dates, weathercode: dates.map(() => 2) };
+  const days = weather._internal.buildForecast14({ daily });
+  assert.strictEqual(days.length, 14, 'never more than 14 days');
+  assert.strictEqual(days[0].day, 'Today');
+  assert.strictEqual(days[13].day, 'Mon', 'day 14 is labelled by its weekday');
+});
+
+test('14-day forecast: empty payload yields an empty array', () => {
+  assert.deepStrictEqual(weather._internal.buildForecast14({}), []);
+  assert.deepStrictEqual(weather._internal.buildForecast14({ daily: {} }), []);
+});
+
+// ===== ⏱️ 14-day 30-minute drill-down (buildForecast14DaySlots) ============
+test('14-day 30-min slots: 48 slots, interpolation, sun honesty, wind mean', () => {
+  const internal = weather._internal;
+  const hourly = { time: [], temperature_2m: [], weather_code: [], precipitation: [], precipitation_probability: [], cloud_cover: [], wind_speed_10m: [], wind_direction_10m: [], is_day: [], snowfall: [] };
+  for (let h = 0; h < 24; h++) {
+    hourly.time.push(`2026-09-20T${String(h).padStart(2, '0')}:00`);
+    hourly.temperature_2m.push(10 + h * 0.5);
+    hourly.weather_code.push(h < 12 ? 0 : 61);
+    hourly.precipitation.push(h < 12 ? 0 : 0.4);
+    hourly.precipitation_probability.push(h < 12 ? 5 : 80);
+    hourly.cloud_cover.push(h < 12 ? 10 : 90);
+    hourly.wind_speed_10m.push(10 + h);
+    hourly.wind_direction_10m.push(180);
+    hourly.is_day.push(h >= 7 && h <= 19 ? 1 : 0);
+    hourly.snowfall.push(0);
+  }
+  hourly.time.push('2026-09-21T00:00');
+  hourly.temperature_2m.push(22); hourly.weather_code.push(61); hourly.precipitation.push(0.4);
+  hourly.precipitation_probability.push(80); hourly.cloud_cover.push(90);
+  hourly.wind_speed_10m.push(34); hourly.wind_direction_10m.push(180); hourly.is_day.push(0); hourly.snowfall.push(0);
+
+  const slots = internal.buildForecast14DaySlots('2026-09-20', hourly);
+  assert.strictEqual(slots.length, 48, '24 hours x :00/:30');
+  assert.strictEqual(slots[0].time, '00:00');
+  assert.strictEqual(slots[47].time, '23:30');
+  assert.strictEqual(slots[16].sunProb, 90, 'daytime sun chance = 100 - cloud');
+  assert.strictEqual(slots[0].sunProb, 0, 'night never promises sunshine');
+  assert.strictEqual(slots[30].rainProb, 80);
+  assert.strictEqual(typeof slots[30].beaufort, 'number');
+  assert.strictEqual(internal.FORECAST14_SLOTS_PER_DAY, 48);
+  assert.strictEqual(Math.round(internal.meanWindDir(350, 10)), 0, 'circular wind mean wraps');
+  assert.deepStrictEqual(internal.buildForecast14DaySlots('2026-09-20', { time: ['2026-09-20T00:00'] }), []);
+});

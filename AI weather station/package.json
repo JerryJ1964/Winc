@@ -4,7 +4,10 @@
   "private": true,
   "description": "AI Weather Station — PWA with location-based weather alert push notifications (rain, hail, snow, wind above Beaufort 4) for users anywhere on Earth.",
   "scripts": {
-    "test": "node tests/alertLogic.test.js",
+    "test": "node tests/alertLogic.test.js && node tests/seismic.test.js && node tests/volcano.test.js && node tests/fires.test.js && node tests/landslide.test.js && node tests/avalanche.test.js && node tests/dust.test.js && node tests/freeTier.test.js && node tests/aurora.test.js && node tests/globeTempSolar.test.js && node tests/ensoUniverse.test.js && node tests/i18nDutch.test.js && node tests/i18nRuntime.test.js && node tests/localMapControls.test.js && node tests/localRadarBlobs.test.js && node tests/globeBorders.test.js && node tests/globeChips.test.js && node tests/oceanLabels.test.js && node tests/oceanLists.test.js && node tests/locationRefresh.test.js && node tests/localMapTap.test.js",
+    "test:browser": "node tests/globeChips.test.js && node tests/oceanLabels.test.js && node tests/oceanLists.test.js && node tests/locationRefresh.test.js && node tests/i18nDutchBrowser.test.js",
+    "test:slow": "node tests/forecast14Accordion.test.js",
+    "test:all": "npm test && npm run test:browser && npm run test:slow",
     "start": "node server-local.js",
     "dev": "node server-local.js",
     "sync-dist": "node scripts/sync-dist.js",

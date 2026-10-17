@@ -6,6 +6,34 @@ location on Earth**.
 
 New in this build:
 
+- 🔭 **A globe you can actually zoom into** — the planet now opens to **50×** instead of
+  10× (wheel, + / − buttons and tap-to-fly all obey the new ceiling) and stays **razor
+  sharp** the whole way. The Blue Marble image behind the globe holds 4096×2048 pixels =
+  11.4 texels per degree, which runs out around 2×. Past that the app fetches the *same*
+  imagery in the *same* projection from **NASA GIBS** (EPSG:4326
+  `BlueMarble_ShadedRelief_Bathymetry`, 500 m, CORS-enabled) and composites a patch over
+  the base texture: level 4 (18° tiles) → 28.4 texels/°, level 5 → 56.9, level 6 → 113.8
+  and level 7 (2.25° tiles) → **227.6 texels/°** — the deepest that layer serves (level 8
+  answers HTTP 400). The level is chosen from the pixels the eye really gets, the patch is
+  fetched only once the camera has settled, decoded tiles are cached (40) and a failed
+  fetch backs off for 60 s, so offline the base texture simply keeps painting. Measured in
+  headless Chrome: 25 ms per frame at 50× with a live level-7 patch.
+- 🔥 **Active forest fires on the globe** — NASA EONET's open wildfire incidents are
+  normalized by the new `/api/fires` serverless endpoint and drawn as clickable,
+  animated flames at their latest reported positions (newest 100 on the globe;
+  up to 250 retained in the feed). The **Forest fires** chip is
+  a real on/off control, and its flame becomes a glowing orange when one or more
+  active incidents are loaded. The expandable fire panel includes location notes,
+  acreage when EONET supplies it, report age and a source link.
+- 🛰️ **Reliable local-weather controls** — the “Local weather · seen from above”
+  layer switches, forecast slider/play button and + / − / reset controls now all
+  drive the active MapLibre map directly. Weather icons now honour their matching
+  layer switches, ordinary 30-second weather refreshes no longer throw away the selected
+  zoom, controls expose their pressed/disabled state to keyboard and assistive-technology
+  users, and the ⏩ 3-hour forecast preview starts by itself the moment the first forecast
+  series is on screen — a one-off per page load, so a 30-second weather refresh can never
+  restart it after you paused it, and ▶ / ⏸ stays in control.
+
 - 🌦️ **Honest drizzle on the bird's-eye radar** — trace precipitation (WMO drizzle
   codes 51–57, or 0 < mm < 0.3) now gets its own **faint drizzle class**: a small
   pale-blue haze blob with no white shower rim and no animated rain streaks,
@@ -195,6 +223,8 @@ If `VAPID_*` are unset, development fallback keys are used (fine for testing).
   "seen from above" screen, and wind data on every grid cell: current
   `wind_speed` / `wind_direction` / `beaufort` + the parallel `series.wind` /
   `series.windDir` arrays for all 13 forecast frames
+- `api/fires.js` — new serverless endpoint: same-origin NASA EONET wildfire proxy
+  returning normalized active fire locations, report times, acreage and source links
 - `api/nhc.js` — new serverless endpoint: same-origin proxy for NOAA NHC
   `CurrentStorms.json` returning normalized active storm names (name, classification,
   intensity, coords, last update) — no CORS hack needed by the browser

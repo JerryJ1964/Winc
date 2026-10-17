@@ -3,7 +3,7 @@
    - notification click opens the app
    - precaches the app shell for offline use
 */
-const CACHE_NAME = 'ai-weather-station-v15'; // bumped 20260914: temperature-honest icons — 🔥/❄️ extreme badges only at ≥30 °C / ≤0 °C (▲/▼ arrows otherwise) and snowy codes at >2 °C shown as rain, on the 🌡️ bar graph + every 5×5 map cell (front end + api/weather.js) — fresh shell so the fix ships to installed users
+const CACHE_NAME = 'ai-weather-station-v29'; // v29: 🔭 deep-zoom globe — zoom ceiling 10× → 50× with a NASA GIBS tile patch (levels 3–7, up to 227.6 texels/degree) composited over the 4096×2048 Blue Marble buffer, so the planet stays razor sharp while you zoom; fresh shell so installed users get it
 const APP_SHELL = [
   '/',
   '/index.html',
