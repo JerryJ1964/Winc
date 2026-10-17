@@ -8,7 +8,7 @@
     <!-- build:globe-glow-circles-20261001-2 — the same two colours now mark the events ON the globe: every observed 🪨 mudslide / landslide draws as a luminous fluorescent GREEN circle and every official 🏔️ avalanche zone as a luminous fluorescent BLUE circle (shared drawLuminousCircle helper: additive fluorescent halo + white-cored neon disc + crisp white rim, gently breathing). Modelled risk halos are re-tinted to match (green for slope risk, icy blue for snow load) and stay soft/unclickable so estimates can never be mistaken for events. Only the marker look changed — data feeds, labels, click targets and the danger number inside the blue disc are untouched. -->
 
 
-    <!-- build:localmap-cloud-drift-20261017-2 — 🌧️ radar clouds glide again: the organic-blob drift engine (localMapGLDriftGrid, ~12 fps, same wind math as the icons, wrapped inside ±half a cell) is now actually driven by the icon animation loop + re-armed on every grid rebuild, so rain/cloud blobs stream with the live wind instead of sitting frozen while a forecast frame is on screen. Blobs + needle unchanged. -->
+    <!-- build:localmap-cloud-drift-20261017-3 — 🌧️ radar clouds advect downwind with forecast time: each organic blob is carried by wind × hours-ahead (clamped to ±1 cell) so stepping ▶/slider visibly streams rain across the map instead of recolouring pinned blobs; live wind wobble continues between frames. Blobs + needle unchanged. -->
     <!-- build:nowcast-20260827-1 -->
     <!-- build:pwa-alerts-20260829-1 — installable PWA + push notifications for rain / hail / snow / wind > Beaufort 4 -->
     <!-- build:ios-fixes-20260830-1 — iOS warnings work, Download button visible on iOS, polar-safe globe rotation (spin-then-tilt) -->
@@ -12038,8 +12038,7 @@ async function sendTestPush() {
         let localMapGLPin = null;                 // 📍 tap-a-spot pin (tap the map → weather for that place)
         let localMapGLPinCoords = null;           // { lat, lon } of the pin — used to detect stale pins
         let localMapLastTapAt = 0;                // double-tap debounce — the 2nd tap of a double-tap is a zoom gesture
-        let localMapGLGridDriftRAF = 0;           // 🌧️ live radar drift — blobs glide with the wind (below)
-        let localMapGLGridDriftCells = null;      // raw cells + spacing for the drift loop (rebuilt per frame)
+        let localMapGLGridDriftCells = [];        // 🌧️ live radar drift — cells + wind so the blobs glide (below)
         const localMapGLState = { dataRef: null, gridFrame: -1, ringsKey: '', placesKey: '', homeKey: '' };
         const localMapGLEmptyFC = { type: 'FeatureCollection', features: [] };
 
@@ -12490,6 +12489,8 @@ async function sendTestPush() {
 
         // 🌧️ Live drift state: one entry per radar blob so the GeoJSON field can
         // glide with the wind between forecast frames (same wind math as the icons).
+        // (Storage is the top-level `localMapGLGridDriftCells` declared with the
+        // other map state above — never re-declared here.)
         let localMapGLGridDriftLast = 0;
         function localMapGLDriftGrid(t) {
             try {
@@ -12546,6 +12547,21 @@ async function sendTestPush() {
             // single forecast frame is on screen — no more frozen clouds.
             const hx = dLon * 0.68, hy = dLat * 0.68;
             const blobRing = (lon, lat, seed) => localMapGLBlobRing(lon, lat, seed, hx, hy);
+            // 🌧️ Forecast advection: carry each blob downwind by wind × time-ahead
+            // so stepping the timeline visibly streams rain across the map — not
+            // just recolouring pinned squares. Clamped to ±1 cell so a blob stays
+            // tied to its sky patch while clearly gliding.
+            const advect = (lon, lat, windKmh, toRad) => {
+                if (!localMapFrame || !windKmh) return [lon, lat];
+                const hoursAhead = localMapFrame * 0.25;
+                const distKm = Math.min(windKmh * hoursAhead, 30);
+                const cosLat = Math.max(0.2, Math.cos((lat || 0) * Math.PI / 180));
+                let dLo = Math.sin(toRad) * distKm / (111.2 * cosLat);
+                let dLa = Math.cos(toRad) * distKm / 111.2;
+                dLo = Math.max(-dLon, Math.min(dLon, dLo));
+                dLa = Math.max(-dLat, Math.min(dLat, dLa));
+                return [lon + dLo, lat + dLa];
+            };
             const features = [];
             const drift = [];
             const wrapLon = Math.max(dLon, 0.004) * 0.5;   // ± half a cell (same wrap as icons)
@@ -12556,11 +12572,13 @@ async function sendTestPush() {
                 // Keep this cell's live wind so the blob can flow with it
                 const fromDeg = typeof cell.wind_direction === 'number' && Number.isFinite(cell.wind_direction) ? cell.wind_direction : 0;
                 const windKmh = Math.max(0, Number(cell.wind_speed) || 0);
+                const toRad = ((fromDeg + 180) % 360) * Math.PI / 180;
+                const [aLon, aLat] = advect(cell.lon, cell.lat, windKmh, toRad);
                 drift.push({
-                    i, lon: cell.lon, lat: cell.lat, hx, hy,
+                    i, lon: aLon, lat: aLat, hx, hy,
                     cls, fill: localMapGLCellPaint(cls, cell),
                     tip: localMapGLCellTip(cell), icon: cell.icon || LOCALMAP_ICON_OTHER,
-                    windDirRad: ((fromDeg + 180) % 360) * Math.PI / 180,
+                    windDirRad: toRad,
                     windKmh, wrapLon, wrapLat,
                     phase: Math.abs(cell.lat * 0.731 + cell.lon * 0.159)
                 });
@@ -12575,7 +12593,7 @@ async function sendTestPush() {
                         tip: localMapGLCellTip(cell),
                         icon: cell.icon || LOCALMAP_ICON_OTHER
                     },
-                    geometry: { type: 'Polygon', coordinates: [blobRing(cell.lon, cell.lat, i + 1)] }
+                    geometry: { type: 'Polygon', coordinates: [blobRing(aLon, aLat, i + 1)] }
                 });
             });
             localMapGL.getSource('lmc-grid').setData({ type: 'FeatureCollection', features });
