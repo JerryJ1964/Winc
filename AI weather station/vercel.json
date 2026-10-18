@@ -1,6 +1,20 @@
 {
   "version": 2,
   "buildCommand": "",
+  "functions": {
+    "api/weather.js": { "maxDuration": 15 },
+    "api/nhc.js": { "maxDuration": 15 },
+    "api/earthquake.js": { "maxDuration": 15 },
+    "api/tsunami.js": { "maxDuration": 15 },
+    "api/volcano.js": { "maxDuration": 15 },
+    "api/fires.js": { "maxDuration": 15 },
+    "api/landslide.js": { "maxDuration": 15 },
+    "api/avalanche.js": { "maxDuration": 15 },
+    "api/dust.js": { "maxDuration": 15 },
+    "api/solar.js": { "maxDuration": 15 },
+    "api/aurora.js": { "maxDuration": 15 },
+    "api/push.js": { "maxDuration": 60 }
+  },
   "outputDirectory": ".",
   "rewrites": [
     { "source": "/weather", "destination": "/api/weather" },
@@ -21,9 +35,21 @@
       ]
     },
     {
+      "source": "/(app\\.js|style\\.css|main\\.js)",
+      "headers": [
+        { "key": "Cache-Control", "value": "public, max-age=0, must-revalidate" }
+      ]
+    },
+    {
       "source": "/icons/(.*)",
       "headers": [
         { "key": "Cache-Control", "value": "public, max-age=86400" }
+      ]
+    },
+    {
+      "source": "/data/(.*)",
+      "headers": [
+        { "key": "Cache-Control", "value": "public, max-age=604800, stale-while-revalidate=86400" }
       ]
     }
   ]

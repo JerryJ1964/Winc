@@ -4,7 +4,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8').replace('<link rel="stylesheet" href="style.css">', () => '<style>' + fs.readFileSync(path.join(__dirname, '..', 'style.css'), 'utf8') + '</style>').replace('<script src="app.js" defer></script>', () => '<script>' + fs.readFileSync(path.join(__dirname, '..', 'app.js'), 'utf8') + '</script>');
 
 // 📐 The CSS size of the square: min(--lm-frac, max(--lm-cap, 90svh)) with the
 // globe's own media-query steps mirrored in index.html — --lm-cap 540px base,
@@ -71,7 +71,8 @@ test('local-map controls are complete, accessible and not duplicated', () => {
     'the old strip height survives only as the no-aspect-ratio fallback');
   assert.match(html, /@supports not \(aspect-ratio: 1\) \{[\s\S]*?\.localmap-stage \{ width: 100%; height: clamp\(340px, 62vmin, 500px\); \}/);
   assert.match(html, /if \(localMapGL && typeof localMapGL\.resize === 'function'\) localMapGL\.resize\(\);/);
-  assert.match(html, /if \(showNow\) fitLocalMapLayout\(\);/);
+  assert.match(html, /if \(active === 'now' && typeof fitLocalMapLayout === 'function'\) fitLocalMapLayout\(\);/,
+    'returning to the Now tab re-fits the bird\'s-eye map layout');
   assert.match(html, /const homeChanged = nextHomeKey !== localMapGLState\.homeKey/);
   assert.match(html, /function localMapGLSyncAllVisibility\(\)/);
   assert.match(html, /el\.dataset\.layer = layer/);

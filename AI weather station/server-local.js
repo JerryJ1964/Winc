@@ -40,6 +40,11 @@ const earthquakeHandler = require('./api/earthquake.js');
 const tsunamiHandler = require('./api/tsunami.js');
 const volcanoHandler = require('./api/volcano.js');
 const firesHandler = require('./api/fires.js');
+const landslideHandler = require('./api/landslide.js');
+const avalancheHandler = require('./api/avalanche.js');
+const dustHandler = require('./api/dust.js');
+const solarHandler = require('./api/solar.js');
+const auroraHandler = require('./api/aurora.js');
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -124,6 +129,31 @@ const server = http.createServer(async (req, res) => {
 
     if (pathname === '/api/fires') {
       await firesHandler(makeApiReq(req), makeApiRes(res));
+      return;
+    }
+
+    if (pathname === '/api/landslide') {
+      await landslideHandler(makeApiReq(req), makeApiRes(res));
+      return;
+    }
+
+    if (pathname === '/api/avalanche') {
+      await avalancheHandler(makeApiReq(req), makeApiRes(res));
+      return;
+    }
+
+    if (pathname === '/api/dust') {
+      await dustHandler(makeApiReq(req), makeApiRes(res));
+      return;
+    }
+
+    if (pathname === '/api/solar') {
+      await solarHandler(makeApiReq(req), makeApiRes(res));
+      return;
+    }
+
+    if (pathname === '/api/aurora') {
+      await auroraHandler(makeApiReq(req), makeApiRes(res));
       return;
     }
 

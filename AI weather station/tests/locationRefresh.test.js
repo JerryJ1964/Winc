@@ -3,14 +3,21 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const puppeteer = require('puppeteer');
 
-test('Update location always requests fresh device coordinates and handles failures', async () => {
+test('Update searches the typed city; the GPS button requests fresh device coordinates', async () => {
+  // Dynamic import, like globeBorders: the installed puppeteer is ESM-only, so a
+  // bare require() would break `npm test` whenever npm resolves an older Node.
+  const puppeteer = (await import('puppeteer')).default;
   const browser = await puppeteer.launch({ headless: true });
   try {
     const page = await browser.newPage();
-    const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+    const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8').replace('<link rel="stylesheet" href="style.css">', () => '<style>' + fs.readFileSync(path.join(__dirname, '..', 'style.css'), 'utf8') + '</style>').replace('<script src="app.js" defer></script>', () => '<script>' + fs.readFileSync(path.join(__dirname, '..', 'app.js'), 'utf8') + '</script>');
     await page.evaluateOnNewDocument(() => {
+      // Pin the UI language: initLanguage() falls back to navigator.language, so
+      // on a Dutch-locale machine (and in CI images with different defaults) the
+      // page boots in Dutch and the English assertions below would fail for a
+      // reason that has nothing to do with location handling.
+      try { localStorage.setItem('aiwx-lang', 'en'); } catch (e) { /* ignore */ }
       Object.defineProperty(navigator, 'geolocation', { configurable: true, value: {
         getCurrentPosition(success, failure) { failure({ code: 1 }); }
       } });
@@ -22,11 +29,25 @@ test('Update location always requests fresh device coordinates and handles failu
     });
     await page.goto('http://localhost:3000/', { waitUntil: 'domcontentloaded' });
     await page.waitForFunction('typeof useMyLocation === "function" && !locatingDevice');
+    // The startup GPS run resolves asynchronously (permission denied in the
+    // stub above) — wait until it has fully settled before stubbing, or the
+    // late failure note would clobber the assertions below.
+    await page.waitForFunction('typeof manualBtn !== "undefined" && !manualBtn.disabled');
     await page.evaluate(() => {
       window.weatherQueries = [];
       window.positionOptions = [];
       window.ipCalls = 0;
       window.originalFetchWeather = fetchWeather;
+      window.originalUpdateLocation = updateLocation;
+      // Stub BOTH layers: updateLocation (reads the input) and fetchWeather
+      // (records the query). The Update-button path goes through
+      // updateLocation, the GPS path calls applyGpsPosition → updateLocation —
+      // stubbing only fetchWeather leaves updateLocation calling the real
+      // fetch, which the request-interception aborts in this test.
+      updateLocation = async (showLoading) => {
+        activeLocation = locationInput.value.trim();
+        await fetchWeather(activeLocation, true, true);
+      };
       fetchWeather = async (query) => { window.weatherQueries.push(query); };
       refreshPushCoordinates = () => {};
       ipBasedLocation = async () => { window.ipCalls++; return null; };
@@ -39,11 +60,24 @@ test('Update location always requests fresh device coordinates and handles failu
       gpsCoords = { latitude: 10, longitude: 20, timestamp: Date.now() };
       locationInput.value = 'London';
       activeLocation = 'London';
-      locationInput.dispatchEvent(new Event('input'));
     });
+    // The Update button searches the TYPED city — no GPS involved.
+    // (The mocked fetchWeather resolves instantly, so the button may already
+    // be re-enabled by the time we assert — check the query, not the spinner.)
+    await page.click('#manual-update');
+    await page.waitForFunction(`window.weatherQueries.includes('London')`);
+    await page.waitForFunction('!manualBtn.disabled');
+    assert.equal(await page.evaluate(() => positionOptions.length), 0, 'Update never triggers GPS');
+    assert.equal(await page.evaluate(() => weatherQueries.includes('London')), true, 'Update searches the typed city');
+    assert.equal(await page.evaluate(() => activeLocation), 'London');
+    // The GPS button (useMyLocation) requests fresh device coordinates.
+    await page.evaluate(() => { window.weatherQueries = []; });
     for (const latitude of [52.12345, 53.23456]) {
-      await page.click('#manual-update');
-      assert.equal(await page.$eval('#manual-update', (el) => el.disabled), true);
+      // Fire-and-forget: awaiting the returned promise would block until the
+      // app's geolocation safety timers expire (~7.5 s per attempt), because
+      // the mock never calls back until resolvePosition runs below — by then
+      // useMyLocation would have already exhausted both attempts and failed.
+      await page.evaluate(() => { useMyLocation(true); });
       // Wait beyond the city-search debounce: it must have been cancelled.
       await new Promise((resolve) => setTimeout(resolve, 850));
       assert.equal(await page.evaluate(() => weatherQueries.includes('London')), false);
@@ -57,12 +91,13 @@ test('Update location always requests fresh device coordinates and handles failu
     }
     assert.equal(await page.evaluate(() => positionOptions.length), 2, 'even a fresh cached fix is ignored');
     const lastLocation = await page.evaluate(() => activeLocation);
-    await page.click('#manual-update');
+    // Fire-and-forget again — see the loop above for why awaiting would hang.
+    await page.evaluate(() => { useMyLocation(true); });
     await page.evaluate(() => rejectPosition({ code: 1 }));
     await page.waitForFunction('!manualBtn.disabled');
     assert.match(await page.$eval('#location-note', (el) => el.textContent), /permission denied/);
     assert.equal(await page.evaluate(() => activeLocation), lastLocation);
-    await page.click('#manual-update');
+    await page.evaluate(() => { useMyLocation(true); });
     await page.evaluate(() => rejectPosition({ code: 3 }));
     await page.waitForFunction('positionOptions.length === 5');
     assert.equal(await page.evaluate(() => positionOptions.at(-1).maximumAge), 0);

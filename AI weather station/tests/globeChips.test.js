@@ -10,9 +10,8 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const puppeteer = require('puppeteer');
 
-const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8').replace('<link rel="stylesheet" href="style.css">', () => '<style>' + fs.readFileSync(path.join(__dirname, '..', 'style.css'), 'utf8') + '</style>').replace('<script src="app.js" defer></script>', () => '<script>' + fs.readFileSync(path.join(__dirname, '..', 'app.js'), 'utf8') + '</script>');
 
 // globeLayerOn key → the hit-test type its markers are pushed with
 // (quakes draw as 'quake'; elnino/gulf are tints with no click targets).
@@ -26,6 +25,8 @@ const LAYER_HIT_TYPE = {
   quakes: 'quake',
   volcano: 'volcano',
   fires: 'fires',
+  landslide: 'landslide',
+  avalanche: 'avalanche',
   tsunami: 'tsunami'
 };
 
@@ -104,9 +105,14 @@ test('static: every legend button under the globe is wired as an on/off switch',
     ['earthquakes', 'globeLayerOn.quakes === false'],
     ['volcanoes', 'globeLayerOn.volcano === false'],
     ['forest fires', 'globeLayerOn.fires === false'],
+    ['mudslides & landslides', 'globeLayerOn.landslide === false'],
+    ['snow avalanches', 'globeLayerOn.avalanche === false'],
+    ['saharan dust', 'globeLayerOn.dust === false'],
+    ['sandstorms', 'globeLayerOn.sandstorm === false'],
     ['tsunamis', 'globeLayerOn.tsunami === false'],
     ['sea tints', 'globeLayerOn.elnino !== false'],
     ['gulf tint', 'globeLayerOn.gulf !== false'],
+    ['la niña tint', 'globeLayerOn.lanina !== false'],
     ['ocean labels', 'globeLayerOn[label.layer] === false'],
     ['you-effects', 'globeLayerOn[YOU_EFFECT_LAYER[kind]] !== false']
   ];
@@ -114,12 +120,52 @@ test('static: every legend button under the globe is wired as an on/off switch',
     assert.ok(html.includes(snippet), `${what} painter checks its switch`);
   }
 
-  // The sea-surface hint only makes sense while a tint is showing.
-  assert.match(html, /seaHint\.hidden = globeLayerOn\.elnino === false && globeLayerOn\.gulf === false/,
-    'the sea hint hides only when BOTH tints are off');
+  // The sea-surface hint only makes sense while a tint is showing (three tints:
+  // El Niño, Gulf Stream, La Niña — the hint hides only when ALL are off).
+  assert.match(html, /seaHint\.hidden = globeLayerOn\.elnino === false && globeLayerOn\.gulf === false && globeLayerOn\.lanina === false/,
+    'the sea hint hides only when ALL tints are off');
 });
 
 // ---------- offline browser behaviour ----------
+
+// Regression: a globe painter that is CALLED but never DEFINED is a ReferenceError
+// at run time, not a syntax error, so check-inline-js stayed green while the whole
+// globe render died on every frame. Catch it statically by proving that every
+// `draw*(` painter invoked from drawGlobe() actually has a definition.
+test('every globe painter called from drawGlobe() is actually defined', () => {
+  // Brace-match the real function body: a lazy /[\s\S]*?\n {8}\}/ stops at the
+  // first nested helper that happens to close at the same indent (the sunrise
+  // temperature ramp does), silently cutting off every painter call below it.
+  const start = html.indexOf('function drawGlobe()');
+  assert.ok(start >= 0, 'drawGlobe() body found');
+  const open = html.indexOf('{', start);
+  let depth = 0, end = -1;
+  for (let i = open; i < html.length; i++) {
+    const ch = html[i];
+    if (ch === '{') depth++;
+    else if (ch === '}') { depth--; if (depth === 0) { end = i; break; } }
+  }
+  assert.ok(end > open, 'drawGlobe() body closes');
+  const body = html.slice(start, end + 1);
+
+  // Collect the painter calls made inside drawGlobe(), ignoring method calls
+  // (ctx.fill, globePoint, …) by only keeping names that start with `draw`.
+  const called = new Set([...body.matchAll(/\b(draw[A-Za-z0-9_$]*)\s*\(/g)].map((m) => m[1]));
+  assert.ok(called.size >= 5, 'drawGlobe() delegates to several painters');
+
+  const missing = [...called].filter((name) =>
+    !new RegExp('function\\s+' + name + '\\s*\\(').test(html));
+  assert.deepEqual(missing, [],
+    'every painter called from drawGlobe() has a definition (an undefined one ' +
+    'throws a ReferenceError that silently kills every later layer)');
+
+  // And the reverse sanity check: the wind-driven sandstorm painter must exist,
+  // carry its layer guard, and use both halves of the dust+wind evidence.
+  assert.match(html, /function drawSandstorms\(ctx, cx, cy, R, size\)/);
+  assert.match(html, /globeLayerOn\.sandstorm === false/);
+  assert.match(html, /\(p\.sandstormLevel \|\| 0\) > 0/,
+    'a swirl is drawn only where the API says dust AND wind make a sandstorm');
+});
 
 test('the fire chip flame is lit only when active fire data is present', () => {
   assert.match(html, /class="globe-legend-chip" data-globe-layer="fires"[^>]*><span class="fire-icon"/,
@@ -131,6 +177,9 @@ test('the fire chip flame is lit only when active fire data is present', () => {
 });
 
 test('clicking any button beneath the globe switches its layer off and back on', async () => {
+  // Dynamic import, like globeBorders: the installed puppeteer is ESM-only, so a
+  // bare require() would break `npm test` whenever npm resolves an older Node.
+  const puppeteer = (await import('puppeteer')).default;
   const browser = await puppeteer.launch({ headless: true });
   try {
     const page = await browser.newPage();
@@ -162,6 +211,10 @@ test('clicking any button beneath the globe switches its layer off and back on',
       liveEarthquakes = [{ lat: -6, lng: 12, mag: 5.2, place: 'Chip Test Sea', url: '' }];
       liveVolcanoes = [{ lat: 2, lng: 28, name: 'Chip Test', country: 'Iceland', epochMs: Date.now() - 5 * 86400000 }];
       liveFires = [{ lat: -3, lng: 24, name: 'Chip Test Fire', epochMs: Date.now() - 3600000, acres: 120 }];
+      liveLandslides = [{ lat: 12, lng: 30, name: 'Chip Test Slide', hazard: 'mudslide', epochMs: Date.now() - 3600000 }];
+      landslideRisk = [{ lat: 15, lng: 33, name: 'Chip Test Slope', score: 64, level: 2 }];
+      liveAvalanches = [{ lat: 10, lng: 16, name: 'Chip Test Zone', dangerLevel: 3, warning: null }];
+      avalancheRisk = [{ lat: -9, lng: 19, name: 'Chip Test Massif', score: 58, level: 2 }];
       liveTsunamiMessages = [{
         lat: 4, lng: 34, category: 'Warning', threat: true, magnitude: 7.1,
         waveHeights: { maxM: 1.2, maxSource: 'observed', maxSite: 'Chip Test' }
@@ -231,13 +284,15 @@ test('clicking any button beneath the globe switches its layer off and back on',
         globeCtx.fillText = origFill;
       }
 
-      // 🌊 The sea-surface hint follows the two tint switches.
+      // 🌊 The sea-surface hint follows the three tint switches.
       setGlobeLayer('elnino', false);
       setGlobeLayer('gulf', false);
+      setGlobeLayer('lanina', false);
       out.hint.bothOff = !!seaHint.hidden;
       setGlobeLayer('gulf', true);
       out.hint.oneOn = !seaHint.hidden;
       setGlobeLayer('elnino', true);
+      setGlobeLayer('lanina', true);
 
       // Leave the page exactly as it started: every chip switched on.
       globeRotY = 0;
@@ -245,6 +300,10 @@ test('clicking any button beneath the globe switches its layer off and back on',
       liveEarthquakes = [];
       liveVolcanoes = [];
       liveFires = [];
+      liveLandslides = [];
+      landslideRisk = [];
+      liveAvalanches = [];
+      avalancheRisk = [];
       liveTsunamiMessages = [];
       drawGlobe();
       out.final.pressed = [...document.querySelectorAll('[data-globe-layer]')]

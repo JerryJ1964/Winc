@@ -7,7 +7,6 @@
 const { spawn } = require('child_process');
 const fs = require('node:fs');
 const path = require('node:path');
-const puppeteer = require('puppeteer');
 const ROOT = path.join(__dirname, '..');
 const PORT = Number(process.env.F14_PORT || 3198);
 // When a local server is already running (WEATHER_TEST_ALREADY_RUNNING=1) this
@@ -70,13 +69,25 @@ function check(name, ok, extra) {
   }
 
   note('server reachable');
+  // Dynamic import, like globeBorders: the installed puppeteer is ESM-only, so a
+  // bare require() would break whenever an older Node resolves this script.
+  const puppeteer = (await import('puppeteer')).default;
   const browser = await puppeteer.launch({ headless: true, args: ['--window-size=1200,2400'] });
   note('browser launched');
   const page = await browser.newPage();
   await page.setViewport({ width: 1200, height: 1400 });
+  // Headless Chrome DENIES the Geolocation API by default, and the app treats
+  // PERMISSION_DENIED as fatal for startup (useMyLocation() returns before the
+  // first /weather request) — so `latestWeatherData` would never be set and
+  // the wait below would time out. Grant the permission and pin a fix instead.
+  const origin = `http://localhost:${PORT}`;
+  await browser.defaultBrowserContext().overridePermissions(origin, ['geolocation']);
+  await page.setGeolocation({ latitude: 52.37, longitude: 4.89 });
   const errors = [];
   page.on('pageerror', (e) => errors.push('PAGEERROR: ' + e.message));
 
+  // index.html references app.js/style.css — they are served by the dev server
+  // (see request.continue() below), so the raw markup is exactly right here.
   const html = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
   const seen = new Set();
   await page.setRequestInterception(true);

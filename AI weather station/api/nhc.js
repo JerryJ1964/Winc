@@ -6,6 +6,15 @@
 
 const NHC_URL = 'https://www.nhc.noaa.gov/CurrentStorms.json';
 
+// NHC is a government feed and the slowest of the lot: it gets a hard ceiling
+// so a stalled call answers 502 (empty storm list, page still renders) long
+// before the function can run past its maxDuration and surface a 504.
+const NHC_TIMEOUT_MS = Number(process.env.NHC_TIMEOUT_MS || 8000);
+
+function timeoutSignal(ms) {
+  return typeof AbortSignal?.timeout === 'function' ? AbortSignal.timeout(ms) : undefined;
+}
+
 // NHC reports coordinates both as strings ("30.8N" / "95.0W") and, when
 // available, as plain numbers (latitudeNumeric / longitudeNumeric). The globe
 // needs real numbers, so prefer the numeric fields and fall back to parsing
@@ -58,6 +67,7 @@ module.exports = async function handler(req, res) {
 
   try {
     const response = await fetch(NHC_URL, {
+      signal: timeoutSignal(NHC_TIMEOUT_MS),
       headers: {
         Accept: 'application/json',
         'User-Agent': 'AI-Weather-Station/1.1 (+https://github.com/JerryJ1964/Winc)'

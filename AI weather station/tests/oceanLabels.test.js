@@ -4,15 +4,17 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const puppeteer = require('puppeteer');
 
 test('ocean names render at their coordinates, rotate, and hide on the far side', async () => {
+  // Dynamic import, like globeBorders: the installed puppeteer is ESM-only, so a
+  // bare require() would break `npm test` whenever npm resolves an older Node.
+  const puppeteer = (await import('puppeteer')).default;
   const browser = await puppeteer.launch({ headless: true });
   try {
     const page = await browser.newPage();
     const url = process.env.OCEAN_LABELS_URL || 'http://localhost:3000/';
     if (!process.env.OCEAN_LABELS_URL) {
-      const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+      const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8').replace('<link rel="stylesheet" href="style.css">', () => '<style>' + fs.readFileSync(path.join(__dirname, '..', 'style.css'), 'utf8') + '</style>').replace('<script src="app.js" defer></script>', () => '<script>' + fs.readFileSync(path.join(__dirname, '..', 'app.js'), 'utf8') + '</script>');
       await page.setRequestInterception(true);
       page.on('request', (request) => {
         if (request.isNavigationRequest() && request.frame() === page.mainFrame()) {

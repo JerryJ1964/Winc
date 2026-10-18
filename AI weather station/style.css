@@ -1,0 +1,2052 @@
+        :root {
+            color-scheme: light;
+        }
+        body {
+            font-family: 'Inter', system-ui, sans-serif;
+            margin: 0;
+            min-height: 100vh;
+            min-height: 100svh;   /* small-viewport height: on phones the browser URL bar makes 100vh taller than the visible screen */
+            background: radial-gradient(circle at top left, #c8e7ff 0%, transparent 35%),
+                radial-gradient(circle at bottom right, #da8fff 0%, transparent 25%),
+                linear-gradient(180deg, #0f2d57 0%, #102f50 35%, #406fa5 100%);
+            color: #eef1f8;
+            display: flex;
+            /* Vertical flex-align is intentionally NOT set: flex centering clips the top of the card
+               whenever the card is taller than the viewport (phones, short laptop windows),
+               and the clipped part can never be scrolled into view. .container { margin: auto }
+               centers exactly the same way, but the auto margins collapse to 0 on overflow,
+               so the top of the page always stays reachable. */
+            justify-content: center;
+            padding: 20px;
+            box-sizing: border-box;
+        }
+        .container {
+            /* 📐 ONE fluid scale for the whole app (Option C). The card used to sit
+               at three fixed widths (620 → 820 → 940px), so it jumped in steps and
+               the 🛰️ map underneath it — which bleeds to the screen edges — never
+               lined up with the form. Now the card grows CONTINUOUSLY with the
+               viewport: clamp() between a comfortable phone width (560px) and a
+               roomy desktop cap (1080px), with 92vw as the proportional middle, so
+               every screen size gets its own width instead of one of three.
+               min(100%, …) keeps it inside the body padding, so no width can ever
+               produce a sideways scrollbar. The 🌍 globe and the 🛰️ map are both
+               children of this card, so they now resize WITH it — the form, the
+               globe and the map are always exactly the same width. */
+            width: min(100%, clamp(560px, 92vw, 1080px));
+            /* margin:auto + body display:flex = overflow-safe vertical centering (see body) */
+            margin: auto;
+            /* border-box keeps width:100% + padding inside the viewport — without
+               it the card is 2×26px wider than a 390px phone screen, which used
+               to push the whole page into a horizontal scroll of 412px. */
+            box-sizing: border-box;
+            background: linear-gradient(180deg, rgba(19, 56, 100, 0.96) 0%, rgba(30, 70, 130, 0.92) 100%);
+            border-radius: 28px;
+            box-shadow: 0 28px 80px rgba(0, 23, 73, 0.35);
+            /* The inner padding scales with the card too, so the gutters around the
+               form, the globe and the map keep their proportion on every screen
+               instead of eating a fixed 26px out of a 390px phone and a tiny slice
+               out of a 1080px desktop. */
+            padding: clamp(14px, 2.4vw, 30px);
+            border: 1px solid rgba(255,255,255,0.12);
+            -webkit-backdrop-filter: blur(16px);
+            backdrop-filter: blur(16px);
+        }
+        h1 {
+            text-align: center;
+            margin: 0 0 12px;
+            color: #f9fbff;
+        }
+        .subtitle {
+            text-align: center;
+            color: rgba(233, 244, 255, 0.9);
+            margin-bottom: 18px;
+        }
+        .subtitle-dutch {
+            display: block;
+            margin-top: 6px;
+            color: rgba(226, 239, 255, 0.8);
+            font-size: 0.95rem;
+            font-style: italic;
+        }
+        /* 🇬🇧⇄🇳🇱 language toggle: sits beside the title, never shifts the layout
+           of anything below it, and stays reachable with a keyboard. */
+        .title-row {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 12px;
+            flex-wrap: wrap;
+            margin-bottom: 12px;
+        }
+        .title-row h1 { margin: 0; }
+        .lang-toggle {
+            font: inherit;
+            font-size: 0.82rem;
+            line-height: 1.1;
+            color: #e9f4ff;
+            background: rgba(255, 255, 255, 0.08);
+            border: 1px solid rgba(255, 255, 255, 0.22);
+            border-radius: 999px;
+            padding: 6px 12px;
+            cursor: pointer;
+            white-space: nowrap;
+            transition: background 0.15s, border-color 0.15s;
+        }
+        .lang-toggle:hover { background: rgba(255, 255, 255, 0.18); }
+        .lang-toggle:focus-visible {
+            outline: 2px solid #7fd4ff;
+            outline-offset: 2px;
+        }
+        .lang-toggle[aria-pressed="true"] {
+            background: rgba(127, 212, 255, 0.22);
+            border-color: rgba(127, 212, 255, 0.6);
+        }
+        .label-dual {
+            line-height: 1.4;
+        }
+        .label-dual small {
+            display: block;
+            color: #7c8a9b;
+            font-size: 0.8rem;
+            font-style: normal;
+            margin-top: 2px;
+        }
+        /* The page shipped with a few "English line + small Dutch underneath"
+           hints (the subtitle, the stat labels, the 14-day subhead). Once the
+           🗺️ toggle translates the MAIN line into Dutch those hints would print
+           the same sentence twice, so hide them while Dutch is active. In
+           English they stay visible, which is exactly how the page looked
+           before — the toggle only ever adds, never removes, information. */
+        html[data-lang="nl"] .subtitle-dutch,
+        html[data-lang="nl"] .label-dual small,
+        html[data-lang="nl"] .forecast14-subtitle small {
+            display: none;
+        }
+        .forecast small {
+            display: block;
+            color: #7c8a9b;
+            font-size: 0.9rem;
+            margin-top: 4px;
+        }
+        .location-tag {
+            display: inline-block;
+            margin-top: 8px;
+            padding: 6px 10px;
+            background: #e6f2ff;
+            color: #1f5aa5;
+            border-radius: 999px;
+            font-size: 0.95rem;
+            font-weight: 600;
+        }
+        .weather-card {
+            border-radius: 30px;
+            background: linear-gradient(145deg, rgba(255,255,255,0.96) 0%, rgba(217, 235, 255, 0.9) 100%);
+            padding: 26px;
+            border: 1px solid rgba(255,255,255,0.2);
+            box-shadow: 0 35px 90px rgba(10, 32, 68, 0.18);
+        }
+        .weather-top {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: flex-start;
+            justify-content: space-between;
+            gap: 18px;
+            margin-bottom: 22px;
+        }
+        .weather-icon {
+            font-size: 4.8rem;
+            line-height: 1;
+        }
+        .location-line {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 10px;
+            margin-top: 10px;
+        }
+        .weather-chip {
+            display: inline-flex;
+            align-items: center;
+            padding: 10px 14px;
+            border-radius: 999px;
+            background: rgba(117, 224, 201, 0.18);
+            color: #046e60;
+            font-weight: 700;
+            font-size: 0.95rem;
+        }
+        .weather-summary {
+            margin-top: 18px;
+            padding: 18px 20px;
+            border-radius: 20px;
+            background: linear-gradient(180deg, rgba(255,255,255,0.92) 0%, rgba(240, 248, 255, 0.92) 100%);
+            border: 1px solid rgba(74, 124, 201, 0.16);
+            color: #1d426d;
+            line-height: 1.75;
+            font-size: 0.99rem;
+        }
+        .current-temp {
+            font-size: 2.4rem;
+            font-weight: 700;
+            color: #0f3150;
+        }
+        .feels-line {
+            font-size: 1.02rem;
+            font-weight: 600;
+            color: #2a6291;
+            margin-top: 2px;
+        }
+        .feels-line small { font-weight: 500; color: #5d89ad; font-size: 0.8rem; }
+        .status-pill {
+            padding: 8px 14px;
+            background: rgba(121, 210, 255, 0.28);
+            color: #0d4f7d;
+            border-radius: 999px;
+            font-size: 0.9rem;
+            font-weight: 700;
+            letter-spacing: 0.02em;
+        }
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 12px;
+            margin-top: 16px;
+        }
+        .stat-card {
+            background: white;
+            border-radius: 12px;
+            padding: 12px;
+            border: 1px solid #e4ecf7;
+        }
+        .stat-label {
+            display: block;
+            color: #60748a;
+            font-size: 0.85rem;
+            margin-bottom: 4px;
+        }
+        .stat-value {
+            font-size: 1rem;
+            font-weight: 700;
+            color: #16324f;
+        }
+        .forecast {
+            margin-top: 12px;
+            color: #35516f;
+            line-height: 1.5;
+        }
+        .location-row {
+            display: grid;
+            grid-template-columns: 1fr auto;
+            gap: 10px;
+            margin-bottom: 16px;
+        }
+        .location-note {
+            margin: 6px 0 0;
+            font-size: 0.74rem;
+            line-height: 1.4;
+            color: #ffcf8f;
+            display: none;
+        }
+        .location-note.error {
+            display: block;
+        }
+        /* ===== 🔔 PWA install + weather alerts UI ===== */
+        .pwa-bar {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin-bottom: 16px;
+        }
+        .app-btn {
+            flex: 1 1 auto;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            padding: 12px 16px;
+            border: none;
+            border-radius: 14px;
+            font-size: 0.95rem;
+            font-weight: 700;
+            cursor: pointer;
+            color: #fff;
+            background: linear-gradient(135deg, #2f9fff 0%, #1b6fd8 100%);
+            box-shadow: 0 6px 18px rgba(20, 80, 200, 0.35);
+            transition: transform 0.12s ease, filter 0.12s ease;
+        }
+        .app-btn:hover { filter: brightness(1.08); }
+        .app-btn:active { transform: scale(0.97); }
+        .app-btn:disabled { opacity: 0.55; cursor: default; }
+        .app-btn.success {
+            background: linear-gradient(135deg, #23c98e 0%, #0e9f6e 100%);
+            box-shadow: 0 6px 18px rgba(14, 159, 110, 0.35);
+        }
+        #install-btn { display: none; }
+        .ios-hint {
+            display: none;
+            width: 100%;
+            margin-top: 2px;
+            padding: 12px 14px;
+            border-radius: 12px;
+            background: rgba(255, 255, 255, 0.10);
+            border: 1px dashed rgba(255,255,255,0.35);
+            color: #eaf3ff;
+            font-size: 0.88rem;
+            line-height: 1.6;
+        }
+        .ios-hint b { color: #ffd66b; }
+        .alert-banner {
+            display: none;
+            margin-bottom: 16px;
+            padding: 14px 16px;
+            border-radius: 16px;
+            background: linear-gradient(135deg, rgba(255, 214, 102, 0.22) 0%, rgba(255, 140, 66, 0.18) 100%);
+            border: 1px solid rgba(255, 200, 90, 0.55);
+            color: #ffe9b0;
+            font-size: 0.95rem;
+            line-height: 1.55;
+        }
+        .alert-banner.show { display: block; }
+        .alert-banner strong { color: #ffd66b; }
+        .alerts-status {
+            width: 100%;
+            margin-top: 2px;
+            color: rgba(222, 238, 255, 0.85);
+            font-size: 0.85rem;
+            line-height: 1.5;
+        }
+        #location-input {
+            width: 100%;
+            /* width:100% + 16px side padding + 1px border must stay INSIDE the
+               container, otherwise the field is 34px wider than its column and
+               widens the whole document on a phone. */
+            box-sizing: border-box;
+            padding: 14px 16px;
+            border: 1px solid rgba(255,255,255,0.24);
+            border-radius: 14px;
+            background: rgba(255,255,255,0.12);
+            color: #eef3ff;
+            font-size: 1rem;
+            outline: none;
+            box-shadow: inset 0 1px 2px rgba(255,255,255,0.12);
+        }
+        #location-input::placeholder {
+            color: rgba(238, 243, 255, 0.72);
+        }
+        #location-input:focus {
+            border-color: #73d3ff;
+            box-shadow: 0 0 0 4px rgba(115, 211, 255, 0.18);
+            background: rgba(255,255,255,0.16);
+        }
+        button {
+            padding: 14px 22px;
+            background: linear-gradient(135deg, #7fd1ff 0%, #2f9fff 100%);
+            color: #fff;
+            border: none;
+            border-radius: 14px;
+            font-size: 1rem;
+            cursor: pointer;
+            font-weight: 700;
+            transition: transform 0.2s ease, box-shadow 0.2s ease;
+            box-shadow: 0 18px 30px rgba(25, 120, 230, 0.18);
+        }
+        button:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 22px 40px rgba(25, 120, 230, 0.22);
+        }
+        button:active { background: #005fa3; }
+        button:disabled { opacity: 0.7; cursor: wait; }
+        .updated { text-align: center; color: #67809b; font-size: 0.9rem; margin-top: 10px; }
+        .icon-list { margin: 24px 0 0; }
+        .icon-list-title { text-align: center; color: #50657b; margin-bottom: 8px; font-weight: 600; }
+        .icon-list-table { width: 100%; border-collapse: collapse; }
+        .icon-list-table td { padding: 9px 10px; font-size: 1.05rem; }
+        .icon-list-table .icon { font-size: 1.75rem; line-height: 1.1; text-align: center; }
+        .forecast-3day {
+            margin-top: 14px;
+            background: linear-gradient(180deg, rgba(248, 252, 255, 0.95) 0%, rgba(223, 241, 255, 0.9) 100%);
+            border: 1px solid rgba(116, 179, 245, 0.22);
+            border-radius: 18px;
+            padding: 16px;
+            box-shadow: inset 0 1px 2px rgba(255,255,255,0.45);
+        }
+        .forecast-title {
+            font-weight: 800;
+            margin-bottom: 12px;
+            color: #1b4d7a;
+            letter-spacing: 0.02em;
+        }
+        .forecast-days {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 10px;
+        }
+        .forecast-day {
+            background: white;
+            border-radius: 12px;
+            padding: 10px;
+            border: 1px solid #e5effc;
+            text-align: center;
+            cursor: pointer;
+            transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
+            width: 100%;
+            font: inherit;
+            color: inherit;
+        }
+        .forecast-day:hover {
+            border-color: #8ec5ff;
+            transform: translateY(-1px);
+        }
+        .forecast-day.selected {
+            border-color: #2f9fff;
+            box-shadow: 0 0 0 3px rgba(47, 159, 255, 0.18);
+            background: #f5faff;
+        }
+        .forecast-hint {
+            margin-top: 10px;
+            font-size: 0.88rem;
+            color: #5b7088;
+            text-align: center;
+        }
+        .forecast-day-name {
+            font-size: 1rem;
+            font-weight: 700;
+            color: #244b7a;
+            margin-bottom: 6px;
+        }
+        .forecast-day-icon {
+            font-size: 2.2rem;
+            line-height: 1.15;
+            margin-bottom: 6px;
+        }
+        .forecast-day-condition {
+            font-size: 1rem;
+            color: #4a6b8c;
+            margin-bottom: 4px;
+        }
+        .forecast-day-temps {
+            font-size: 0.92rem;
+            color: #5b7088;
+        }
+        /* ===== 📅 14-Day Forecast tab ===== */
+        .main-tabs {
+            display: flex;
+            gap: 6px;
+            margin: 4px 0 12px;
+            padding: 5px;
+            background: rgba(16, 42, 82, 0.18);
+            border: 1px solid rgba(120, 170, 230, 0.35);
+            border-radius: 14px;
+        }
+        .main-tab {
+            flex: 1 1 0;
+            border: none;
+            border-radius: 10px;
+            padding: 9px 12px;
+            font-size: 1rem;
+            font-weight: 700;
+            font-family: inherit;
+            color: #3f5d80;
+            background: transparent;
+            cursor: pointer;
+            transition: background 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
+        }
+        .main-tab:hover { background: rgba(255, 255, 255, 0.55); }
+        .main-tab.on {
+            color: #ffffff;
+            background: linear-gradient(135deg, #1e63b4 0%, #2f8de4 100%);
+            box-shadow: 0 3px 10px rgba(31, 99, 180, 0.35);
+        }
+        .universe-card { margin-top: 8px; background: radial-gradient(120% 130% at 50% 0%, #0b1c38 0%, #060d1e 55%, #030710 100%); border: 1px solid rgba(140, 190, 255, 0.35); border-radius: 16px; padding: 16px 14px; box-sizing: border-box; max-width: 100%; overflow: hidden; color: #dbe9ff; }
+        .universe-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
+        .universe-title { font-size: 1.15rem; font-weight: 800; color: #f2f7ff; }
+        .universe-subtitle { font-size: 0.82rem; color: #9db8d8; margin-top: 2px; }
+        .universe-subtitle small { display: block; font-size: 0.72rem; color: #7e97b8; }
+        .universe-loc { font-size: 0.85rem; font-weight: 700; color: #ffe3a3; background: rgba(255, 227, 163, 0.1); border: 1px solid rgba(255, 227, 163, 0.4); padding: 5px 10px; border-radius: 999px; white-space: nowrap; }
+        .universe-controls { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
+        .universe-btn { border: 1px solid rgba(140, 190, 255, 0.45); background: rgba(20, 42, 78, 0.6); color: #cfe4ff; border-radius: 999px; padding: 7px 13px; font-size: 0.88rem; font-weight: 700; font-family: inherit; cursor: pointer; }
+        .universe-btn:hover { background: rgba(47, 141, 228, 0.35); }
+        .universe-btn.on { color: #fff; background: linear-gradient(135deg, #3b2f8f 0%, #1e63b4 60%, #2f8de4 100%); }
+        .universe-stage { position: relative; width: 100%; aspect-ratio: 16 / 10; min-height: 300px; border-radius: 12px; overflow: hidden; background: #02040a; border: 1px solid rgba(140, 190, 255, 0.25); }
+        .universe-stage canvas { width: 100%; height: 100%; display: block; }
+        .universe-caption { margin-top: 10px; font-size: 0.9rem; color: #e8f1ff; line-height: 1.45; }
+        .universe-scale { margin-top: 6px; font-size: 0.76rem; color: #8fa9c9; }
+        .universe-footnote { margin-top: 6px; font-size: 0.72rem; color: #6d87a8; }
+        .forecast14-card {
+            margin-top: 8px;
+            background: #f1f7ff;
+            border: 1px solid rgba(120, 170, 230, 0.4);
+            border-radius: 16px;
+            padding: 16px 14px;
+            box-sizing: border-box;
+            max-width: 100%;
+            overflow: hidden;
+            min-width: 0;
+        }
+        .forecast14-head {
+            display: flex;
+            align-items: baseline;
+            justify-content: space-between;
+            gap: 10px;
+            flex-wrap: wrap;
+            margin-bottom: 10px;
+            min-width: 0;
+            max-width: 100%;
+        }
+        .forecast14-title {
+            font-size: 1.15rem;
+            font-weight: 800;
+            color: #10345a;
+        }
+        .forecast14-subtitle {
+            font-size: 0.88rem;
+            color: #50657b;
+            margin-top: 2px;
+        }
+        .forecast14-subtitle small { display: block; color: #7c8b9d; }
+        .forecast14-location {
+            font-size: 0.92rem;
+            font-weight: 700;
+            color: #1e63b4;
+            text-align: right;
+        }
+        .forecast14-list {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            min-width: 0;
+            max-width: 100%;
+        }
+        .f14-day {
+            display: grid;
+            grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.5fr) minmax(0, 0.9fr) minmax(0, 0.7fr) minmax(0, 1.2fr) minmax(0, 0.9fr);
+            align-items: center;
+            gap: 8px;
+            width: 100%;
+            max-width: 100%;
+            box-sizing: border-box;
+            min-width: 0;
+            overflow: hidden;
+            text-align: left;
+            border: 1px solid rgba(120, 170, 230, 0.3);
+            border-radius: 12px;
+            background: white;
+            padding: 10px 10px;
+            font-family: inherit;
+            font-size: 0.95rem;
+            color: #24466b;
+            cursor: pointer;
+            transition: transform 0.1s ease, box-shadow 0.15s ease, border-color 0.15s ease;
+        }
+        .f14-day:hover {
+            border-color: rgba(47, 141, 228, 0.65);
+            box-shadow: 0 3px 10px rgba(31, 99, 180, 0.16);
+        }
+        .f14-day:active { transform: scale(0.99); }
+        .f14-day.selected {
+            border-color: #2f8de4;
+            background: linear-gradient(180deg, #eaf4ff 0%, #ffffff 100%);
+            box-shadow: inset 0 0 0 1px rgba(47, 141, 228, 0.55);
+        }
+        .f14-day.expanded {
+            align-items: start;
+            border-color: #2f8de4;
+            background: linear-gradient(180deg, #e4f0ff 0%, #ffffff 100%);
+            box-shadow: 0 4px 14px rgba(31, 99, 180, 0.22), inset 0 0 0 1px rgba(47, 141, 228, 0.55);
+        }
+        .f14-day-main {
+            display: contents;
+            background: none;
+            border: none;
+            padding: 0;
+            margin: 0;
+            font: inherit;
+            color: inherit;
+            text-align: inherit;
+            cursor: pointer;
+            min-width: 0;
+            max-width: 100%;
+        }
+        /* Expanded day: summary row on top, half-hour slots as a full-width
+           vertical list below — the whole day panel grows, no sliding strip. */
+        .f14-day.expanded {
+            display: block;
+        }
+        .f14-day.expanded .f14-day-main {
+            display: grid;
+            grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.5fr) minmax(0, 0.9fr) minmax(0, 0.7fr) minmax(0, 1.2fr) minmax(0, 0.9fr);
+            align-items: center;
+            gap: 8px;
+            width: 100%;
+            max-width: 100%;
+            min-width: 0;
+        }
+        /* Narrow screens are handled with the other responsive 14-day rules
+           further down (same 3-column, 2-row template for the collapsed row
+           AND the expanded summary), so an open day can never overflow. */
+        .f14-day-name {
+            font-weight: 800;
+            color: #10345a;
+            line-height: 1.15;
+            min-width: 0;
+            max-width: 100%;
+            overflow: hidden;
+        }
+        .f14-day-name small {
+            display: block;
+            font-weight: 600;
+            font-size: 0.78rem;
+            color: #7c8b9d;
+        }
+        .f14-day-weather {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            min-width: 0;
+        }
+        .f14-day-icon { font-size: 1.9rem; line-height: 1.15; }
+        .f14-day-cond {
+            font-size: 0.9rem;
+            color: #4a6b8c;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .f14-day-temps {
+            display: flex;
+            flex-direction: column;
+            gap: 1px;
+            font-weight: 800;
+            font-size: 0.95rem;
+            min-width: 0;
+            max-width: 100%;
+            overflow: hidden;
+            white-space: nowrap;
+        }
+        .f14-day-temps .t-max { color: #d87500; }
+        .f14-day-temps .t-min { color: #2a7fc9; }
+        .f14-day-bar { display: flex; align-items: center; min-width: 0; max-width: 100%; overflow: hidden; }
+        .f14-range-track {
+            position: relative;
+            display: block;
+            width: 100%;
+            height: 8px;
+            border-radius: 999px;
+            background: rgba(16, 42, 82, 0.1);
+            overflow: hidden;
+        }
+        .f14-range-fill {
+            position: absolute;
+            top: 0;
+            bottom: 0;
+            border-radius: 999px;
+            background: linear-gradient(90deg, #7cc4ff 0%, #ffd66b 60%, #ff9d4d 100%);
+        }
+        .f14-day-wind {
+            display: flex;
+            align-items: center;
+            gap: 7px;
+            font-size: 0.84rem;
+            color: #35567a;
+            min-width: 0;
+            max-width: 100%;
+            overflow: hidden;
+        }
+        /* The arrow must never be squeezed by long "WNW · Bf 4" text. */
+        .f14-day-wind .f14-wind-arrow { flex: 0 0 auto; }
+        .f14-wind-text {
+            display: flex;
+            flex-direction: column;
+            min-width: 0;
+            max-width: 100%;
+            overflow: hidden;
+        }
+        .f14-wind-text b,
+        .f14-wind-text small {
+            display: block;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .f14-wind-arrow {
+            width: 17px;
+            height: 17px;
+            flex: 0 0 auto;
+            fill: #2f8de4;
+            filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.25));
+        }
+        .f14-wind-text { line-height: 1.2; }
+        .f14-wind-text small { display: block; color: #7c8b9d; font-size: 0.76rem; }
+        .f14-day-rain {
+            display: flex;
+            flex-direction: column;
+            align-items: flex-start;
+            gap: 1px;
+            min-width: 0;
+            max-width: 100%;
+            overflow: hidden;
+        }
+        .f14-rain-chip {
+            display: inline-flex;
+            align-items: center;
+            gap: 3px;
+            padding: 2px 8px;
+            border-radius: 999px;
+            background: rgba(64, 132, 228, 0.14);
+            border: 1px solid rgba(64, 132, 228, 0.4);
+            color: #1c5db3;
+            font-weight: 800;
+            font-size: 0.88rem;
+            max-width: 100%;
+            box-sizing: border-box;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .f14-rain-mm { font-size: 0.76rem; color: #7c8b9d; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .f14-expand-hint { font-size: 0.75rem; color: #8ba3bd; font-weight: 600; }
+        .f14-day.expanded .f14-expand-hint { color: #1e63b4; }
+        /* ===== ⏱️ 30-minute drill-down inside a 14-day row ===== */
+        .f14-slots {
+            grid-column: 1 / -1;
+            margin-top: 10px;
+            border-top: 1px dashed rgba(64, 132, 228, 0.35);
+            padding-top: 10px;
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(min(118px, 100%), 1fr));
+            gap: 8px;
+            padding-bottom: 4px;
+            min-width: 0;
+            max-width: 100%;
+            box-sizing: border-box;
+        }
+        /* One chip = one half-hour slot, stacked as lines inside the card.
+           Every line is allowed to shrink (min-width:0 + overflow:hidden), so
+           the wind / 💧 % / ☀️ % text can never spill outside the border. */
+        .f14-slot {
+            min-width: 0;
+            width: 100%;
+            box-sizing: border-box;
+            background: #f2f8ff;
+            border: 1px solid #dbe7f5;
+            border-radius: 10px;
+            padding: 6px 6px 7px;
+            text-align: center;
+            color: #16324f;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 1px;
+            overflow: hidden;
+        }
+        .f14-slot.night { background: #eef1f8; border-color: #d5dcea; }
+        .f14-slot > span {
+            display: block;
+            width: 100%;
+            max-width: 100%;
+            min-width: 0;
+            box-sizing: border-box;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .f14-slot .hh-time { font-size: 0.76rem; font-weight: 800; color: #5c7390; }
+        .f14-slot .hh-icon { font-size: 1.7rem; line-height: 1.25; }
+        .f14-slot .hh-temp { font-size: 0.92rem; font-weight: 800; }
+        .f14-slot .hh-wind { font-size: 0.74rem; color: #2f6f9f; font-weight: 700; white-space: nowrap; }
+        .f14-slot .hh-bf { font-size: 0.7rem; color: #7c8b9d; font-weight: 600; white-space: nowrap; }
+        /* FIX 20260920: 💧 rain % ABOVE ☀️ sun %, stacked on two lines inside
+           the chip. Side-by-side the two pills are wider than a ~102px chip,
+           so one always hung over the border (PC included). Stacked, each
+           pill is only ~50px wide and can never overflow. These rules come
+           AFTER the generic ".f14-slot > span" rule above, so with equal
+           specificity (0,2,0) they win the cascade. */
+        .f14-slot > span.hh-probs {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 1px;
+            margin-top: 1px;
+            font-size: 0.66rem;
+            font-weight: 700;
+            width: 100%;
+            max-width: 100%;
+            min-width: 0;
+            flex: 0 1 auto;
+            align-self: stretch;
+            box-sizing: border-box;
+            white-space: normal;
+            overflow: hidden;
+            text-overflow: clip;
+        }
+        .f14-slot .hh-prob { font-size: 0.72rem; font-weight: 700; white-space: nowrap; line-height: 1.35; }
+        .f14-slot .hh-prob.rain { color: #1c5db3; }
+        .f14-slot .hh-prob.sun { color: #b87e00; }
+        .f14-slots-empty { font-size: 0.8rem; color: #7c8b9d; padding: 4px 2px; }
+        @media (max-width: 700px) {
+            /* fr-only tracks: columns can shrink with the card, so the row
+               can never push wider than the viewport on a phone. */
+            .f14-day,
+            .f14-day.expanded .f14-day-main {
+                grid-template-columns: minmax(0, 1.1fr) minmax(0, 1.6fr) minmax(0, 1fr) minmax(0, 1.2fr);
+            }
+            .f14-day-bar { display: none; }
+            .f14-day-cond { font-size: 0.84rem; }
+        }
+        @media (max-width: 480px) {
+            .main-tab { padding: 8px 8px; font-size: 0.92rem; }
+            .f14-day,
+            .f14-day.expanded .f14-day-main {
+                grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr) minmax(0, 1fr) minmax(0, 1.1fr);
+                gap: 6px;
+                padding: 8px;
+            }
+            .f14-day-rain .f14-rain-mm { display: none; }
+            .f14-wind-text small { display: none; }
+        }
+        .forecast14-note {
+            text-align: center;
+            color: #50657b;
+            font-size: 0.88rem;
+            padding: 14px 8px;
+        }
+        /* ===== ☀️ Solar tab ===== */
+        .solar-card {
+            margin-top: 8px;
+            background: #fff8e8;
+            border: 1px solid rgba(230, 170, 60, 0.45);
+            border-radius: 16px;
+            padding: 16px 14px;
+            box-sizing: border-box;
+            max-width: 100%;
+            overflow: hidden;
+            min-width: 0;
+        }
+        .solar-head {
+            display: flex;
+            align-items: baseline;
+            justify-content: space-between;
+            gap: 10px;
+            flex-wrap: wrap;
+            margin-bottom: 12px;
+        }
+        .solar-title { font-size: 1.15rem; font-weight: 800; color: #7a4d00; }
+        .solar-subtitle { font-size: 0.88rem; color: #8a6a2f; margin-top: 2px; }
+        .solar-location { font-size: 0.92rem; font-weight: 700; color: #b87e00; text-align: right; }
+        .solar-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+            gap: 10px;
+        }
+        .solar-cell {
+            background: #fff;
+            border: 1px solid rgba(230, 170, 60, 0.35);
+            border-radius: 12px;
+            padding: 12px 10px;
+            text-align: center;
+        }
+        .solar-cell .solar-emoji { font-size: 1.6rem; line-height: 1.2; }
+        .solar-cell .solar-value { font-size: 1.3rem; font-weight: 800; color: #5f3d00; margin-top: 4px; }
+        .solar-cell .solar-label { font-size: 0.8rem; font-weight: 700; color: #8a6a2f; margin-top: 2px; }
+        .solar-cell .solar-sub { font-size: 0.74rem; color: #a08650; margin-top: 2px; }
+        .solar-uv-pill {
+            display: inline-block;
+            margin-top: 6px;
+            padding: 3px 10px;
+            border-radius: 999px;
+            font-size: 0.76rem;
+            font-weight: 800;
+            color: #fff;
+            background: #2f9e44;
+        }
+        .solar-uv-pill.moderate { background: #e8a100; }
+        .solar-uv-pill.high { background: #e8590c; }
+        .solar-uv-pill.very-high, .solar-uv-pill.extreme { background: #c2255c; }
+        .solar-uv-pill.unknown { background: #868e96; }
+        .solar-advice { margin-top: 10px; font-size: 0.86rem; color: #6b5320; line-height: 1.5; }
+        .solar-foot { margin-top: 10px; font-size: 0.72rem; color: #a08650; }
+        .solar-sunrow {
+            display: flex; align-items: center; justify-content: space-between;
+            gap: 10px; margin-top: 12px; padding: 10px 14px;
+            background: linear-gradient(90deg, #fff3d6 0%, #ffe9b8 50%, #f7dcff 100%);
+            border: 1px solid rgba(230, 170, 60, 0.35); border-radius: 12px;
+        }
+        .solar-sun { display: flex; align-items: center; gap: 8px; }
+        .solar-sun-emoji { font-size: 1.5rem; line-height: 1; }
+        .solar-sun-text b { display: block; font-size: 1.02rem; color: #5f3d00; }
+        .solar-sun-text small { display: block; font-size: 0.72rem; color: #8a6a2f; font-weight: 700; }
+        .solar-sun-arc {
+            flex: 1 1 auto; height: 26px; position: relative; overflow: hidden;
+            border-top: 3px dashed rgba(184, 126, 0, 0.55); border-radius: 50% 50% 0 0 / 100% 100% 0 0;
+            margin: 0 4px;
+        }
+        .solar-sun-arc .solar-sun-dot {
+            position: absolute; left: 50%; top: -4px; width: 12px; height: 12px;
+            margin-left: -6px; border-radius: 50%;
+            background: radial-gradient(circle at 35% 35%, #ffe066, #f59f00);
+            box-shadow: 0 0 10px rgba(245, 159, 0, 0.8);
+            transition: left 0.8s linear, top 0.8s linear, opacity 0.4s ease;
+        }
+        /* Sun below the horizon (before sunrise / after sunset): parked at the arc's
+           ends by updateSunArc() and dimmed until daylight returns. */
+        .solar-sun-arc .solar-sun-dot.is-night { opacity: 0.45; }
+        @media (prefers-reduced-motion: reduce) {
+            .solar-sun-arc .solar-sun-dot { transition: none; }
+        }
+        .solar-fc-title { margin-top: 14px; font-size: 0.9rem; font-weight: 800; color: #7a4d00; }
+        .solar-strip {
+            display: flex; gap: 8px; overflow-x: auto; padding: 10px 2px 4px;
+            scrollbar-width: thin;
+        }
+        .solar-slot {
+            flex: 0 0 auto; min-width: 76px; text-align: center;
+            background: #fff; border: 1px solid rgba(230, 170, 60, 0.35);
+            border-radius: 12px; padding: 8px 6px; color: #5f3d00;
+        }
+        .solar-slot.is-night { background: #eef1f6; border-color: #d3d9e3; color: #4a5a75; }
+        .solar-slot .ss-time { font-size: 0.7rem; font-weight: 800; color: #8a6a2f; }
+        .solar-slot.is-night .ss-time { color: #5a6b8c; }
+        .solar-slot .ss-icon { font-size: 1.25rem; line-height: 1.3; }
+        .solar-slot .ss-w { font-size: 0.78rem; font-weight: 800; }
+        .solar-slot .ss-bar { height: 5px; border-radius: 3px; background: #f1e3bd; margin: 5px 4px 4px; overflow: hidden; }
+        .solar-slot .ss-fill { display: block; height: 100%; border-radius: 3px; background: linear-gradient(90deg, #ffd43b, #f59f00); }
+        .solar-slot.is-night .ss-fill { background: #9aa8c3; }
+        .solar-slot .ss-uv { font-size: 0.68rem; font-weight: 700; color: #9a6b00; }
+        .solar-slot.is-night .ss-uv { color: #5a6b8c; }
+        .solar-slot .ss-temp { font-size: 0.78rem; font-weight: 800; color: #c2410c; margin-top: 3px; }
+        .solar-slot.is-night .ss-temp { color: #5a6b8c; }
+        .forecast14-note.error { color: #b42318; }
+        .forecast14-footnote {
+            margin-top: 10px;
+            font-size: 0.72rem;
+            color: #7c8b9d;
+            text-align: center;
+        }
+        .footer-center { text-align: center; margin-top: 12px; }
+        .openweather-logo { height: 28px; vertical-align: middle; }
+        .openweather-credit { color: #7c8b9d; font-size: 0.9rem; vertical-align: middle; }
+        .footer-center .site-author {
+            display: block;
+            color: #ffffff;
+            font-size: 1.05rem;
+            font-weight: 800;
+            letter-spacing: 0.03em;
+            margin-bottom: 4px;
+            text-shadow: 0 1px 3px rgba(4, 15, 34, 0.6);
+        }
+        .globe-weather-display {
+            margin-top: 18px;
+            border-radius: 20px;
+            border: 1px solid rgba(115, 184, 255, 0.22);
+            background: linear-gradient(180deg, rgba(13, 33, 64, 0.92) 0%, rgba(22, 50, 92, 0.9) 100%);
+            padding: 14px 16px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            flex-wrap: wrap;
+        }
+        .globe-weather-left {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        .globe-weather-icon {
+            font-size: 2.2rem;
+            line-height: 1;
+        }
+        .globe-weather-temp {
+            font-size: 1.6rem;
+            font-weight: 800;
+            color: #eaf5ff;
+        }
+        .globe-weather-cond {
+            color: #8fb2dd;
+            font-size: 0.85rem;
+            font-weight: 600;
+        }
+        .globe-weather-effects {
+            display: flex;
+            gap: 6px;
+            flex-wrap: wrap;
+        }
+        .globe-weather-effect-chip {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            padding: 4px 10px;
+            border-radius: 999px;
+            background: rgba(120, 200, 255, 0.14);
+            color: #cfe9ff;
+            font-size: 0.78rem;
+            font-weight: 700;
+            border: 1px solid rgba(140, 205, 255, 0.3);
+        }
+        .globe-panel {
+            margin-top: 12px;
+            border-radius: 20px;
+            border: 1px solid rgba(115, 184, 255, 0.22);
+            background: linear-gradient(180deg, rgba(13, 33, 64, 0.92) 0%, rgba(22, 50, 92, 0.9) 100%);
+            padding: 14px 14px 12px;
+            overflow: hidden;
+        }
+        .globe-head {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+        .globe-title { color: #eaf5ff; font-size: 0.95rem; font-weight: 800; letter-spacing: 0.02em; }
+        .globe-title small { display: block; color: #8fb2dd; font-size: 0.78rem; font-weight: 500; margin-top: 2px; }
+        .globe-gps-btn {
+            padding: 8px 14px;
+            border-radius: 999px;
+            font-size: 0.82rem;
+            font-weight: 700;
+            background: rgba(120, 200, 255, 0.16);
+            color: #cfe9ff;
+            border: 1px solid rgba(140, 205, 255, 0.35);
+            box-shadow: none;
+            white-space: nowrap;
+        }
+        .globe-gps-btn:hover { background: rgba(120, 200, 255, 0.28); transform: none; }
+        .globe-gps-btn:disabled { opacity: 0.6; cursor: wait; }
+        .globe-status { color: #7fa7d4; font-size: 0.8rem; text-align: center; padding: 6px 0 2px; }
+        .globe-status.error { color: #ffb3bd; }
+        .globe-stage {
+            position: relative;
+            /* Bigger stage = bigger planet: the canvas fills this box and the
+               globe is drawn at 80% of the canvas width, so the old 420px cap
+               kept the Earth at ~336px. It now grows to 540px (planet ~432px)
+               and the wide-screen rules below take it further still. */
+            width: min(100%, 540px);
+            aspect-ratio: 1;
+            margin: 6px auto 0;
+            /* No background disc: the canvas paints the globe + atmosphere
+               halo itself, so a CSS circle behind it showed as a separate
+               ring when zoomed out. Transparent stage = planet floats clean. */
+            background: transparent;
+        }
+        .globe-stage canvas { width: 100%; height: 100%; display: block; touch-action: none; cursor: grab; /* no border-radius: the canvas is transparent outside the disc, and the atmosphere halo + off-limb aurora tops live out there (up to ~1.45 R) — clipping to a circle would cut them off. The stage itself is transparent (no CSS disc). */ }
+        .globe-stage canvas.dragging { cursor: grabbing; }
+        .globe-hint { text-align: center; font-size: 0.75rem; color: #5f83ad; margin-top: 4px; }
+        .globe-hint a { color: #8ec5ff; text-decoration: underline; text-underline-offset: 2px; }
+        .globe-hint a:hover { color: #cfe6ff; }
+        .sea-hint { margin-top: 6px; }
+        .sea-cold { color: #1c7ed6; font-weight: 700; }
+        .sea-warm-less { color: #ffab40; font-weight: 700; }
+        .sea-warmest { color: #e0240e; font-weight: 700; }
+        .globe-legend { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px; margin-top: 4px; }
+        /* Every chip under the globe is also the switch for its own layer, so they
+           are real <button>s with a pressed state: dimmed + dashed while a layer
+           is switched off. */
+        .globe-legend-chip {
+            display: inline-flex; align-items: center; gap: 4px; padding: 3px 9px; border-radius: 999px;
+            background: rgba(255, 255, 255, 0.92); color: #1d426d; font-size: 0.74rem;
+            border: 1px solid rgba(74, 124, 201, 0.18);
+            font-family: inherit; font-weight: 600; line-height: 1.45; cursor: pointer;
+            transition: background 0.15s ease, opacity 0.15s ease, color 0.15s ease;
+        }
+        .globe-legend-chip:hover { background: #ffffff; border-color: rgba(74, 124, 201, 0.45); }
+        .globe-legend-chip:focus-visible { outline: 2px solid #7fc4ff; outline-offset: 2px; }
+        .globe-legend-chip[aria-pressed="false"] {
+            background: rgba(255, 255, 255, 0.28); color: #48607d; border-style: dashed;
+            opacity: 0.55; filter: grayscale(0.8);
+        }
+        .globe-legend-chip[aria-pressed="false"]:hover { opacity: 0.8; }
+        .globe-controls { display: flex; align-items: center; justify-content: center; gap: 8px; margin-top: 4px; flex-wrap: wrap; }
+        /* 🌊 ENSO dial: manual -3..+3 °C slider that scales the El Niño / La Niña
+           tints live, with a live NOAA ONI readout. Same card styling family. */
+        .enso-dial { display: flex; align-items: center; justify-content: center; gap: 8px; margin-top: 6px; flex-wrap: wrap;
+            background: rgba(8, 24, 48, 0.55); border: 1px solid rgba(140, 190, 255, 0.28); border-radius: 999px;
+            padding: 6px 12px; color: #dbe9ff; font-size: 0.76rem; font-weight: 700; }
+        .enso-dial input[type="range"] { width: min(200px, 44vw); accent-color: #ff9a3c; }
+        .enso-val { min-width: 92px; text-align: center; color: #ffe3a3; font-variant-numeric: tabular-nums; }
+        .enso-live { color: #9db8d8; font-weight: 600; font-size: 0.72rem; }
+        .enso-preset { border: 1px solid rgba(140, 190, 255, 0.4); background: rgba(20, 42, 78, 0.6); color: #cfe4ff;
+            border-radius: 999px; padding: 3px 9px; font-size: 0.72rem; font-weight: 700; font-family: inherit; cursor: pointer; }
+        .enso-preset:hover { background: rgba(47, 141, 228, 0.35); }
+        .globe-zoom-btn {
+            min-width: 32px; height: 32px; border-radius: 50%;
+            background: rgba(120, 200, 255, 0.14); color: #dff2ff;
+            border: 1px solid rgba(150, 210, 255, 0.35);
+            font-size: 1.1rem; font-weight: 800; cursor: pointer; box-shadow: none;
+            display: inline-flex; align-items: center; justify-content: center; padding: 0;
+        }
+        .globe-zoom-btn:hover { background: rgba(120, 200, 255, 0.28); transform: none; }
+        .globe-zoom-btn:disabled { opacity: 0.5; cursor: default; }
+        .globe-zoom-label { color: #b8d2ed; font-size: 0.74rem; font-weight: 700; min-width: 36px; text-align: center; }
+        .nowcast {
+            margin-top: 16px;
+            background: linear-gradient(180deg, rgba(255,255,255,0.97) 0%, rgba(240,248,255,0.95) 100%);
+            border-radius: 20px;
+            border: 1px solid rgba(74, 124, 201, 0.18);
+            color: #1d426d;
+            overflow: hidden;
+        }
+        .nowcast-alert {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 12px;
+            padding: 12px 14px 10px;
+            border-bottom: 1px dashed rgba(74, 124, 201, 0.25);
+        }
+        .nowcast-alert-title {
+            width: 100%;
+            font-weight: 800;
+            font-size: 0.92rem;
+            color: #0f3150;
+        }
+        .nowcast-badges { display: flex; flex-wrap: wrap; gap: 8px; }
+        .nowcast-badge {
+            display: inline-flex; align-items: center; gap: 5px;
+            padding: 6px 11px; border-radius: 999px;
+            background: rgba(111, 123, 141, 0.10);
+            color: #7a8797; font-weight: 700; font-size: 0.88rem;
+            border: 1px solid rgba(111, 123, 141, 0.16);
+        }
+        .nowcast-badge.active-rain { background: rgba(88, 156, 255, 0.20); color: #0b5c8f; border-color: rgba(88, 156, 255, 0.6); }
+        .nowcast-badge.active-hail { background: rgba(150, 110, 220, 0.22); color: #6a3fb8; border-color: rgba(150, 110, 220, 0.6); }
+        .nowcast-badge.active-snow { background: rgba(122, 200, 255, 0.24); color: #2779a8; border-color: rgba(122, 200, 255, 0.7); }
+        .nowcast-badge.active-sun { background: rgba(255, 199, 62, 0.26); color: #9a6b00; border-color: rgba(255, 199, 62, 0.7); }
+        .nowcast-badge.active-wind { background: rgba(64, 215, 150, 0.22); color: #0b7a4b; border-color: rgba(64, 215, 150, 0.6); }
+        .nowcast-precip {
+            margin-left: auto;
+            text-align: center;
+            background: linear-gradient(135deg, #2f9fff 0%, #7fd1ff 100%);
+            color: #fff; border-radius: 16px; padding: 7px 14px;
+            box-shadow: 0 8px 20px rgba(47, 159, 255, 0.25);
+        }
+        .nowcast-precip .mm { font-size: 1.35rem; font-weight: 800; line-height: 1; }
+        .nowcast-precip .lbl { font-size: 0.68rem; opacity: 0.94; }
+        .nowcast-scroll {
+            overflow-x: auto;
+            display: flex; gap: 8px;
+            padding: 12px;
+            scrollbar-width: thin;
+        }
+        .nowcast-slot {
+            flex: 0 0 auto; min-width: 74px;
+            background: #f2f8ff; border: 1px solid #e0eaf6; border-radius: 12px;
+            padding: 8px 6px; text-align: center; color: #16324f;
+        }
+        .nowcast-slot.slot-rain { background: #e7f1ff; border-color: #8fc1ff; }
+        .nowcast-slot.slot-hail { background: #f0eaff; border-color: #c3a7ff; }
+        .nowcast-slot.slot-wind { border-color: #7fe0b6; }
+        .nowcast-slot .slot-time { font-size: 0.72rem; color: #5c7390; font-weight: 700; }
+        .nowcast-slot .slot-icon { font-size: 1.5rem; line-height: 1.25; }
+        .nowcast-slot .slot-cond { font-size: 0.62rem; color: #68809c; min-height: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .nowcast-slot .slot-temp { font-size: 0.84rem; font-weight: 800; }
+        .nowcast-slot .slot-prec { font-size: 0.7rem; color: #2f6f9f; font-weight: 700; }
+        .nowcast-slot .slot-uv { font-size: 0.7rem; color: #9a6b00; font-weight: 700; }
+        .nowcast-foot { padding: 0 14px 12px; font-size: 0.74rem; color: #5c7390; }
+        @media (min-width: 500px) {
+            .nowcast-precip { padding: 9px 16px; }
+        }
+        /* ===== 🛰️ Local weather screen — viewed from above (bird's-eye map) ===== */
+        .localmap-panel {
+            margin-bottom: 16px;
+            border-radius: 18px;
+            border: 1px solid rgba(115, 184, 255, 0.22);
+            background: linear-gradient(180deg, rgba(8, 26, 52, 0.95) 0%, rgba(16, 38, 74, 0.92) 100%);
+            /* 📐 Option C — the 🛰️ "Local weather · seen from above" card now lives
+               INSIDE the main card, exactly the same width as the form above it.
+               It used to bleed out to the screen edges with negative margins
+               (a 50% - 50vw negative margin on both sides) while the form
+               stayed pinned at a fixed 620px, which is why the two looked
+               like different widths.
+               With the one fluid .container scale (see the .container rule) every
+               child inherits the same width, so no bleed is needed at all: the
+               rounded frame stays, and the map can never stick out past the form. */
+            margin-left: 0;
+            margin-right: 0;
+            overflow: hidden;
+            color: #dff2ff;
+        }
+        .localmap-head {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+            padding: 12px 14px 10px;
+            border-bottom: 1px dashed rgba(140, 200, 255, 0.25);
+            /* Centered like the globe title above: the “seen from above”
+               header should sit in the middle of the square, exactly as
+               written — not pinned to the left edge. */
+            text-align: center;
+            justify-content: center;
+        }
+        .localmap-title { font-weight: 800; font-size: 0.92rem; color: #eaf5ff; letter-spacing: 0.02em; text-align: center; width: 100%; }
+        .localmap-title small { display: block; color: #8fb2dd; font-size: 0.76rem; font-weight: 500; margin-top: 2px; }
+        .localmap-temps { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+        .localmap-temp {
+            display: inline-flex; align-items: center; gap: 3px;
+            padding: 4px 9px; border-radius: 999px; font-size: 0.8rem; font-weight: 800;
+        }
+        .localmap-temp.min { background: rgba(122, 200, 255, 0.16); color: #8fe0ff; border: 1px solid rgba(122, 200, 255, 0.4); }
+        .localmap-temp.max { background: rgba(255, 199, 62, 0.16); color: #ffd66b; border: 1px solid rgba(255, 199, 62, 0.4); }
+        .localmap-stage {
+            position: relative;
+            /* 📐 As big as the 🌍 globe — literally the same sizing chain. The globe
+               grows through the media queries further down: 540px here, 720px from
+               900px wide, 840px from 1280px, min(70%, 480px) on short landscape
+               screens. The map mirrors every one of those steps through --lm-cap /
+               --lm-frac (declared alongside each .globe-stage rule below), and
+               max(--lm-cap, 90svh) takes whichever is larger — so the bird's-eye
+               map is AT LEAST as big as the globe on every screen (identical 840px
+               on desktops, bigger wherever its full-bleed card outgrows the globe's
+               container), it still fills the width on phones and tablets, and
+               min(--lm-frac, …) can never overflow sideways. 90svh (small viewport
+               height) keeps mobile browser toolbars out of the calculation, 90vh is
+               the fallback line, and aspect-ratio makes the height follow the width
+               so it stays square on every screen. */
+            --lm-frac: 100%;
+            --lm-cap: 540px;
+            --lm-map-size: min(var(--lm-frac), max(var(--lm-cap), 90vh));
+            --lm-map-size: min(var(--lm-frac), max(var(--lm-cap), 90svh));
+            width: var(--lm-map-size);
+            aspect-ratio: 1;
+            /* border-box, so the 1px frame is INSIDE the square: with the default
+               content-box the two side borders would make the map 2px wider than a
+               phone's screen and add a sideways scrollbar. */
+            box-sizing: border-box;
+            margin: 10px auto 6px;
+            border-radius: 14px;
+            overflow: hidden;
+            background: linear-gradient(180deg, #0a2142 0%, #0c2c58 100%);
+            border: 1px solid rgba(140, 200, 255, 0.28);
+            box-shadow: inset 0 0 24px rgba(0, 0, 0, 0.45);
+        }
+        .localmap-stage canvas { display: block; width: 100%; height: 100%; touch-action: none; }
+        @supports not (aspect-ratio: 1) {
+            /* Very old browser without aspect-ratio: keep a usable size instead of
+               collapsing — the square falls back to the old full-width strip. */
+            .localmap-stage { width: 100%; height: clamp(340px, 62vmin, 500px); }
+            .localmap-stage canvas { height: 320px; }
+        }
+        .localmap-loading {
+            position: absolute; inset: 0;
+            display: flex; align-items: center; justify-content: center;
+            color: rgba(200, 226, 255, 0.85); font-size: 0.88rem; font-weight: 600;
+            text-shadow: 0 1px 4px rgba(0, 0, 0, 0.5);
+            pointer-events: none;
+            text-align: center;
+            padding: 0 16px;
+        }
+        .localmap-loading.hidden { display: none; }
+        /* ===== 🛰️ MapLibre GL map — the professional top-down radar ===== */
+        #localmap-map {
+            position: relative; width: 100%;
+            /* Fills the square .localmap-stage above — the stage owns the size now
+               (the old fixed strip height of 340–500 px is gone from this rule; it
+               survives only in the @supports fallback further up). */
+            height: 100%;
+            background: #060d1c;   /* deep space blue behind tiles while they load */
+            border-radius: 0;
+            font-family: 'Inter', system-ui, sans-serif;
+        }
+        #localmap-map .maplibregl-canvas { outline: none; border-radius: 0; }
+        #localmap-map .maplibregl-canvas-container { cursor: crosshair; }
+        /* live-data chip pinned to the map corner — the "broadcast" touch */
+        .localmap-live-chip {
+            position: absolute; top: 10px; left: 10px; z-index: 5;
+            display: inline-flex; align-items: center; gap: 6px;
+            padding: 4px 10px; border-radius: 999px;
+            background: rgba(6, 14, 30, 0.82);
+            border: 1px solid rgba(140, 200, 255, 0.35);
+            color: #cfe9ff; font-size: 0.7rem; font-weight: 800;
+            letter-spacing: 0.06em; text-transform: uppercase;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.45);
+            backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px);
+            pointer-events: none;
+        }
+        .localmap-live-chip .dot {
+            width: 8px; height: 8px; border-radius: 50%;
+            background: #3dff8a; box-shadow: 0 0 8px rgba(61, 255, 138, 0.9);
+            animation: lmc-pulse 2s ease-in-out infinite;
+        }
+        @keyframes lmc-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
+        /* (top-right forecast pill removed — top-left live chip is the only one) */
+        /* MapLibre controls, re-themed to match the dark radar chrome */
+        .localmap-stage .maplibregl-ctrl-group {
+            background: rgba(8, 18, 36, 0.9) !important;
+            border: 1px solid rgba(140, 200, 255, 0.3) !important;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.4) !important;
+        }
+        .localmap-stage .maplibregl-ctrl-scale {
+            background: rgba(8, 18, 36, 0.78) !important;
+            border-color: rgba(160, 200, 240, 0.55) !important;
+            color: #cfe4ff !important;
+            font-size: 10px !important; font-weight: 700;
+            border-radius: 4px; padding: 1px 6px !important;
+            text-shadow: 0 1px 2px rgba(0, 0, 0, 0.7);
+        }
+        .localmap-stage .maplibregl-ctrl-attrib {
+            background: rgba(6, 12, 26, 0.72) !important;
+            color: #9db8dc !important;
+            font-size: 10px !important;
+        }
+        .localmap-stage .maplibregl-ctrl-attrib a { color: #b9d4f5 !important; }
+        .localmap-stage .maplibregl-ctrl-attrib-button { filter: invert(0.85) hue-rotate(180deg); }
+        /* (single "You are here" marker is drawn directly on the canvas in
+           the local-map render function, below the center dot) */
+        .localmap-cellinfo {
+            padding: 2px 14px 6px;
+            font-size: 0.72rem; color: #8fb2dd; min-height: 13px;
+            text-align: center;
+        }
+        .localmap-foot {
+            display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between;
+            gap: 8px; padding: 4px 14px 12px;
+        }
+        .localmap-time {
+            font-size: 0.76rem; font-weight: 700; color: #b8d2ed;
+            display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap;
+            flex: 1 1 auto; min-width: 0;   /* leaves room for the 💧 mm badge beside the window */
+        }
+        .localmap-time b {
+            color: #8fe0ff; font-weight: 800;
+            font-variant-numeric: tabular-nums;
+            text-shadow: 0 0 10px rgba(143, 224, 255, 0.35);
+        }
+        /* 🗺️ Weather icons carried by the wind (below the radar): every icon
+           keeps its REAL sky condition (sun ☀️, cloud ☁️, rain 🌧️, drizzle
+           🌦️, snow ❄️, hail 🧊, fog 🌫️) but drifts through its own cell
+           like weather flowing with the wind — each cell's live wind speed +
+           direction push the icon, and calm air leaves it floating gently. */
+        .localmap-icon-grid {
+            padding: 8px 14px 6px;
+            border-top: 1px dashed rgba(140, 200, 255, 0.22);
+            background: rgba(8, 26, 52, 0.55);
+        }
+        .localmap-icon-grid-head {
+            display: flex; align-items: baseline; justify-content: space-between;
+            gap: 8px; margin-bottom: 6px;
+        }
+        .localmap-icon-grid-title {
+            font-size: 0.7rem; font-weight: 700; color: #8fb2dd;
+            letter-spacing: 0.02em; text-transform: uppercase;
+        }
+        .localmap-icon-grid-cells {
+            position: relative;
+            height: 200px;
+            overflow: hidden;
+            border-radius: 12px;
+            /* soft sky backdrop + a faint 5×5 lattice so the flowing icons
+               still read as "one icon per cell" as they drift with the wind */
+            background-color: rgba(8, 20, 42, 0.62);
+            background-image:
+                radial-gradient(ellipse at 50% 40%, rgba(130, 185, 240, 0.12), transparent 62%),
+                linear-gradient(180deg, rgba(28, 58, 96, 0.28), rgba(6, 16, 38, 0)),
+                linear-gradient(90deg, rgba(120, 180, 240, 0.09) 1px, transparent 1px),
+                linear-gradient(0deg, rgba(120, 180, 240, 0.09) 1px, transparent 1px);
+            background-size: 100% 100%, 100% 100%, 20% 20%, 20% 20%;
+            box-shadow: inset 0 1px 4px rgba(0, 0, 0, 0.4);
+        }
+        .lmc-icon-grid-cell {
+            position: absolute;
+            display: flex; flex-direction: column; align-items: center; justify-content: center;
+            min-width: 30px; min-height: 40px;
+            padding: 1px 7px;
+            background: rgba(10, 26, 54, 0.72);
+            border: 1px solid rgba(140, 200, 255, 0.28);
+            border-radius: 999px;
+            text-align: center;
+            font-family: 'Inter', system-ui, sans-serif;
+            box-shadow: 0 3px 9px rgba(0, 0, 0, 0.5), inset 0 0 0 0.5px rgba(165, 210, 255, 0.16);
+            pointer-events: none;
+            will-change: transform, left, top;
+        }
+        .lmc-icon-grid-icon {
+            font-size: 1.15rem;
+            line-height: 1;
+            margin-bottom: 1px;
+            filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.55));
+        }
+        .lmc-icon-grid-temp {
+            font-size: 0.6rem; font-weight: 800; color: #ffd66b;
+            line-height: 1.1; margin-top: 1px;
+            text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
+        }
+        @media (max-width: 640px) {
+            .localmap-icon-grid-cells { height: 170px; }
+            .lmc-icon-grid-cell { min-width: 26px; min-height: 34px; }
+        }
+        /* ===== 🌡️ Air-temperature bar graph @ 2 m (under the flowing icons) =====
+           One bar per grid cell — same 5×5 lattice order as the map and the
+           flowing icons — each bar carrying its cell's true weather icon and
+           the measured 2 m temperature (the height above the headline 1.50 m
+           feels-like value on the chips). */
+        .localmap-tempgraph {
+            margin-top: 8px;
+            border-top: 1px dashed rgba(140, 200, 255, 0.16);
+            padding-top: 6px;
+        }
+        .localmap-tempgraph-head {
+            display: flex; align-items: baseline; justify-content: space-between;
+            gap: 8px; margin-bottom: 4px;
+        }
+        .localmap-tempgraph-title {
+            font-size: 0.7rem; font-weight: 700; color: #8fb2dd;
+            letter-spacing: 0.02em; text-transform: uppercase;
+        }
+        .localmap-tempgraph-bars {
+            display: flex; align-items: stretch;
+            gap: 3px;
+            height: 128px;
+            padding: 7px 5px 5px;
+            border-radius: 12px;
+            background-color: rgba(8, 20, 42, 0.62);
+            background-image:
+                radial-gradient(ellipse at 50% 0%, rgba(130, 185, 240, 0.10), transparent 62%),
+                linear-gradient(180deg, rgba(28, 58, 96, 0.22), rgba(6, 16, 38, 0));
+            box-shadow: inset 0 1px 4px rgba(0, 0, 0, 0.4);
+            overflow: hidden;
+        }
+        .lm-temp-col {
+            flex: 1 1 0;
+            min-width: 0;
+            display: flex; flex-direction: column; align-items: center; justify-content: flex-end;
+            border-radius: 7px;
+            padding: 1px 1px 0;
+            cursor: default;
+        }
+        .lm-temp-col:hover { background: rgba(140, 200, 255, 0.10); }
+        .lm-temp-icon {
+            font-size: 0.92rem;
+            line-height: 1;
+            margin-bottom: 2px;
+            filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.55));
+        }
+        .lm-temp-val {
+            font-size: 0.6rem; font-weight: 800; color: #ffd66b;
+            line-height: 1.1; margin-bottom: 3px;
+            text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
+            white-space: nowrap;
+        }
+        .lm-temp-track {
+            position: relative;
+            flex: 1 1 auto;
+            width: 100%;
+            min-height: 10px;
+            border-bottom: 1px solid rgba(140, 200, 255, 0.28);
+        }
+        .lm-temp-bar {
+            position: absolute;
+            left: 0; right: 0; bottom: 0;
+            border-radius: 4px 4px 0 0;
+            min-height: 3px;
+            box-shadow: inset 0 0 0 0.5px rgba(255, 255, 255, 0.16), 0 0 8px rgba(0, 0, 0, 0.25);
+        }
+        .lm-temp-col.hot .lm-temp-val { color: #ff9f6b; }
+        .lm-temp-col.cold .lm-temp-val { color: #9fdcff; }
+        @media (max-width: 640px) {
+            .localmap-tempgraph-bars { height: 104px; }
+            .lm-temp-icon { font-size: 0.8rem; }
+            .lm-temp-val { font-size: 0.55rem; }
+        }
+        .localmap-legend { display: flex; flex-wrap: wrap; gap: 6px; }
+        .localmap-legend-chip {
+            display: inline-flex; align-items: center; gap: 4px;
+            padding: 3px 9px; border-radius: 999px;
+            background: rgba(255, 255, 255, 0.08); color: #cfe9ff;
+            font-size: 0.72rem; font-weight: 700;
+            border: 1px solid rgba(140, 205, 255, 0.25);
+        }
+        .localmap-legend-chip::before {
+            content: ''; width: 9px; height: 9px; border-radius: 50%;
+            background: var(--swatch, rgba(255, 255, 255, 0.35));
+            box-shadow: 0 0 7px var(--swatch-glow, transparent);
+            flex: 0 0 auto;
+        }
+        .localmap-legend-chip.c-clouds { --swatch: #c4d8f0; --swatch-glow: rgba(196, 216, 240, 0.75); }
+        .localmap-legend-chip.c-rain   { --swatch: #3d7edb; --swatch-glow: rgba(61, 126, 219, 0.85); }
+        .localmap-legend-chip.c-snow   { --swatch: #eef8ff; --swatch-glow: rgba(232, 248, 255, 0.85); }
+        .localmap-legend-chip.c-hail   { --swatch: #b56bff; --swatch-glow: rgba(181, 107, 255, 0.85); }
+        .localmap-legend-chip.c-wind   { --swatch: #ffb35c; --swatch-glow: rgba(255, 158, 66, 0.85); }
+        .localmap-legend-chip.c-fog    { --swatch: #c6d3e0; --swatch-glow: rgba(198, 211, 224, 0.7); }
+        /* 🗺️ Layer toggles: basemap / clouds / rain / snow / hail / wind */
+        .localmap-layers {
+            display: flex; flex-wrap: wrap; gap: 6px;
+            padding: 0 14px 8px;
+        }
+        .localmap-layer-btn {
+            display: inline-flex; align-items: center; gap: 4px;
+            padding: 3px 9px; border-radius: 999px;
+            background: rgba(255, 255, 255, 0.07); color: #9db8d6;
+            font-size: 0.72rem; font-weight: 700;
+            border: 1px solid rgba(140, 205, 255, 0.2);
+            cursor: pointer; user-select: none; touch-action: manipulation;
+            transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+        }
+        .localmap-layer-btn:hover {
+            border-color: rgba(140, 205, 255, 0.5); color: #d8ebff;
+        }
+        .localmap-layer-btn.on {
+            background: rgba(255, 214, 110, 0.13);
+            border-color: rgba(255, 214, 110, 0.6);
+            color: #ffe3a1;
+            box-shadow: 0 0 10px rgba(255, 214, 110, 0.18);
+        }
+        .localmap-layer-btn.off {
+            opacity: 0.55;
+            text-decoration: line-through;
+        }
+        /* --- ⏩ 3-hour prediction player: ▶/⏸ button + time scrubber under the radar --- */
+        .localmap-player {
+            display: flex; align-items: center; gap: 10px;
+            margin: 2px 14px 8px; padding: 6px 10px;
+            border-radius: 12px;
+            background: rgba(4, 16, 34, 0.55);
+            border: 1px solid rgba(140, 200, 255, 0.22);
+            flex-wrap: wrap;
+        }
+        .localmap-zoom-btn {
+            min-width: 30px;
+            height: 30px;
+            font-size: 1rem;
+        }
+        .zoom-reset-btn { font-size: 0.9rem; }
+        .localmap-zoom-label {
+            min-width: 32px;
+            font-size: 0.72rem;
+        }
+        .localmap-play {
+            flex: 0 0 auto; width: 30px; height: 30px; border-radius: 50%;
+            border: 1px solid rgba(255, 214, 110, 0.55); cursor: pointer;
+            background: rgba(255, 199, 62, 0.14); color: #ffd66b;
+            font-size: 0.82rem; line-height: 1;
+            display: inline-flex; align-items: center; justify-content: center;
+        }
+        .localmap-play.playing { background: rgba(255, 199, 62, 0.32); box-shadow: 0 0 12px rgba(255, 199, 62, 0.45); }
+        .localmap-play:active { transform: scale(0.94); }
+        .localmap-player input[type="range"] { flex: 1 1 auto; min-width: 0; accent-color: #ffd66b; cursor: pointer; }
+        .localmap-frame-label {
+            flex: 0 0 auto; min-width: 96px; text-align: right;
+            font-size: 0.72rem; font-weight: 800; color: #ffd66b;
+            letter-spacing: 0.02em; font-variant-numeric: tabular-nums;
+        }
+        .localmap-tl-forecast i { cursor: pointer; }
+        .localmap-tl-forecast i.sel {
+            outline: 2px solid #ffd66b; outline-offset: -1.5px;
+            box-shadow: 0 0 10px rgba(255, 214, 110, 0.8);
+        }
+        /* --- ⏱️ Arrival timeline: red streak from "now" to when precipitation reaches you --- */
+        .localmap-timeline { padding: 6px 14px 10px; }
+        .localmap-tl-caption {
+            display: flex; flex-direction: column; gap: 3px;
+            font-size: 0.7rem; font-weight: 800; letter-spacing: 0.02em;
+            color: #ff8d99; margin-bottom: 5px;
+            text-shadow: 0 0 12px rgba(255, 77, 94, 0.35);
+        }
+        .localmap-tl-summary { line-height: 1.35; }
+        /* 💧 Expected rainfall amount — its own line just below the caption
+           line that carries the ☁️ average-cloud figure, so the wet part of
+           the next-3-hours story is never buried in a wall of text. */
+        .localmap-tl-precip {
+            font-size: 0.72rem; font-weight: 800;
+            color: #ffd66b; text-shadow: none;
+        }
+        .localmap-tl-caption.calm { color: #8fe0b0; text-shadow: none; }
+        .localmap-tl-caption.calm .localmap-tl-precip { color: #a8e6c1; }
+        /* ☁️ Next-3-hours sky strip: one coloured segment per 15-min slot
+           (clear → clouds → rain/snow/hail). Each wet segment also carries the
+           expected amount (mm) right inside it, so you can SEE what is coming
+           without hovering; dry segments stay empty. */
+        .localmap-tl-forecast {
+            position: relative;
+            height: 30px;
+            margin-bottom: 6px;
+            border-radius: 8px;
+            overflow: hidden;
+            background: rgba(4, 16, 34, 0.9);
+            border: 1px solid rgba(140, 200, 255, 0.22);
+            box-shadow: inset 0 1px 5px rgba(0, 0, 0, 0.5);
+            display: flex;
+            gap: 2px;
+            padding: 1px;
+        }
+        .localmap-tl-forecast i {
+            flex: 1 1 0; min-width: 0; border-radius: 4px;
+            display: flex; align-items: flex-end; justify-content: center;
+            font-size: 0.6rem; font-weight: 800; line-height: 1;
+            padding-bottom: 3px; letter-spacing: -0.01em;
+            overflow: hidden;
+        }
+        .localmap-tl-forecast em {
+            position: absolute; top: 5px; left: 0;
+            transform: translate(-50%, 0);
+            font-style: normal; font-size: 0.72rem; line-height: 1;
+            text-shadow: 0 1px 3px rgba(0, 0, 0, 0.9);
+            pointer-events: none;
+        }
+        .localmap-tl-bar {
+            position: relative; height: 14px; border-radius: 999px;
+            background: rgba(4, 16, 34, 0.92);
+            border: 1px solid rgba(140, 200, 255, 0.25);
+            box-shadow: inset 0 1px 5px rgba(0, 0, 0, 0.55);
+        }
+        .localmap-tl-ticks { position: absolute; inset: 0; pointer-events: none; }
+        .localmap-tl-ticks i { position: absolute; top: 0; bottom: 0; width: 1px; background: rgba(140, 200, 255, 0.18); }
+        .localmap-tl-streak {
+            position: absolute; top: 3px; bottom: 3px; left: 0; width: 0;
+            border-radius: 999px; overflow: hidden;
+            background: linear-gradient(90deg, rgba(255, 77, 94, 0.18) 0%, rgba(255, 77, 94, 0.55) 55%, #ff4d5e 100%);
+            box-shadow: 0 0 10px rgba(255, 77, 94, 0.55), 0 0 24px rgba(255, 77, 94, 0.28);
+            transition: left 0.5s ease, width 0.5s ease;
+        }
+        .localmap-tl-streak::after {
+            content: ''; position: absolute; top: 0; bottom: 0; left: -34%; width: 34%;
+            background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.85), transparent);
+            animation: localmap-tl-pulse 1.6s linear infinite;
+        }
+        @keyframes localmap-tl-pulse { to { left: 100%; } }
+        .localmap-tl-now {
+            position: absolute; top: -3px; bottom: -3px; left: 0; width: 2px;
+            background: #ff4d5e; border-radius: 2px;
+            box-shadow: 0 0 8px rgba(255, 77, 94, 0.9);
+            transition: left 0.5s ease;
+        }
+        .localmap-tl-now::before {
+            content: ''; position: absolute; top: -5px; left: 50%; transform: translateX(-50%);
+            border: 5px solid transparent; border-top-color: #ff4d5e; border-bottom: none;
+        }
+        .localmap-tl-arrival {
+            position: absolute; top: 50%; left: 0; width: 12px; height: 12px;
+            transform: translate(-50%, -50%); display: none;
+            background: radial-gradient(circle, #fff 0%, #ff4d5e 60%);
+            border: 2px solid #fff; border-radius: 50%;
+            box-shadow: 0 0 12px rgba(255, 77, 94, 0.95);
+            transition: left 0.5s ease;
+        }
+        .localmap-tl-arrival.show { display: block; animation: localmap-tl-blink 1.1s ease-in-out infinite; }
+        @keyframes localmap-tl-blink {
+            0%, 100% { transform: translate(-50%, -50%) scale(1); }
+            50% { transform: translate(-50%, -50%) scale(1.3); }
+        }
+        .localmap-tl-scale {
+            position: relative; height: 15px; margin-top: 4px;
+            font-size: 0.65rem; font-weight: 700; color: #7fa6d4;
+        }
+        .localmap-tl-scale span { position: absolute; transform: translateX(-50%); white-space: nowrap; }
+        .localmap-tl-scale span:first-child { transform: none; }
+        .localmap-tl-scale span:last-child { transform: translateX(-100%); }
+        @media (max-width: 480px) {
+            .localmap-head { flex-direction: column; align-items: flex-start; }
+            .localmap-cellinfo { min-height: 24px; }
+            .localmap-timeline { padding: 4px 12px 8px; }
+            .localmap-tl-caption { font-size: 0.66rem; }
+            .localmap-tl-forecast i { font-size: 0.52rem; padding-bottom: 2px; }
+            .localmap-tl-forecast em { top: 4px; font-size: 0.66rem; }
+        }
+        /* ===== 📱 Responsive: phone ↔ screen ===== */
+        html {
+            -webkit-text-size-adjust: 100%;   /* Safari */
+            text-size-adjust: 100%;           /* Chrome 54+, Chrome Android 54+, Edge 79+, Firefox, Samsung Internet 6.0+ */
+        }
+
+        @media (max-width: 480px) {
+            .weather-top { flex-direction: column; align-items: flex-start; }
+            .forecast-days { grid-template-columns: 1fr; }
+            body { padding: 12px; }
+            .container { padding: 16px; border-radius: 20px; }
+            h1 { font-size: 1.4rem; margin-bottom: 10px; }
+            .location-row { grid-template-columns: 1fr; }
+            .pwa-bar .app-btn { flex-basis: 100%; }
+            .weather-card { padding: 16px; border-radius: 24px; }
+            .weather-icon { font-size: 4rem; }
+            .current-temp { font-size: 2rem; }
+            .stats-grid { grid-template-columns: 1fr; }
+            .nowcast-slot { min-width: 64px; }
+            .globe-hint, .globe-legend-chip { font-size: 0.7rem; }
+            .globe-zoom-btn { min-width: 28px; height: 28px; }
+            .icon-list-table td { font-size: 0.92rem; }
+            .storm-names summary small { margin-left: 0; width: 100%; text-align: left; }
+        }
+        @media (max-width: 360px) {
+            body { padding: 8px; }
+            .container { padding: 12px; border-radius: 16px; }
+            .app-btn { padding: 10px 12px; font-size: 0.88rem; }
+            .globe-gps-btn { padding: 7px 10px; font-size: 0.76rem; white-space: normal; }
+            .ios-hint, .install-note, .alerts-status { font-size: 0.8rem; }
+            .weather-icon { font-size: 3.2rem; }
+            .icon-list-table td { font-size: 0.88rem; }
+            .icon-list-table .icon { font-size: 1.15rem; }
+        }
+        @media (min-width: 900px) {
+            body { padding: 32px; }
+            /* 📐 The .container width is NOT set here any more: one fluid
+               clamp(560px, 92vw, 1080px) scale (see the .container rule) now covers
+               every screen continuously, instead of jumping 620 → 820 → 940px. */
+            .globe-stage { width: min(100%, 720px); }
+            /* 🛰️ the map takes the globe's step up too — see .localmap-stage. */
+            .localmap-stage { --lm-cap: 720px; }
+            .weather-card { padding: 30px; }
+        }
+        /* Wide desktop / TV screens: the planet gets the room it deserves. */
+        @media (min-width: 1280px) {
+            .globe-stage { width: min(100%, 840px); }
+            .localmap-stage { --lm-cap: 840px; }
+        }
+        @media (max-height: 620px) and (orientation: landscape) {
+            body { padding: 10px; min-height: auto; align-items: flex-start; }
+            .container { padding: 14px; border-radius: 18px; }
+            h1 { font-size: 1.25rem; margin: 0 0 6px; }
+            .subtitle { margin-bottom: 10px; }
+            .location-row { margin-bottom: 10px; }
+            .globe-stage { width: min(70%, 480px); }
+            .localmap-stage { --lm-cap: 480px; --lm-frac: 70%; }
+        }
+        @media (display-mode: standalone) {
+            body { padding-top: max(14px, env(safe-area-inset-top)); padding-bottom: max(14px, env(safe-area-inset-bottom)); }
+        }
+
+        /* ===== 📱 Install note — PWA only, no APK file → nothing for Google Play Protect to block ===== */
+        .install-note {
+            display: block;
+            width: 100%;
+            margin-top: 8px;
+            padding: 12px 14px;
+            border-radius: 12px;
+            background: rgba(255, 255, 255, 0.08);
+            border: 1px solid rgba(255, 255, 255, 0.28);
+            color: #dbeaff;
+            font-size: 0.88rem;
+            line-height: 1.6;
+        }
+        .install-note b { color: #ffd66b; }
+
+        /* ===== 🌀 Storm names reference ===== */
+        .storm-names {
+            margin-top: 22px;
+            border-radius: 16px;
+            background: linear-gradient(180deg, rgba(255, 255, 255, 0.95) 0%, rgba(226, 241, 255, 0.92) 100%);
+            border: 1px solid rgba(116, 179, 245, 0.28);
+            overflow: hidden;
+        }
+        .storm-names summary {
+            cursor: pointer;
+            padding: 14px 16px;
+            font-weight: 800;
+            color: #1b4d7a;
+            font-size: 0.98rem;
+            list-style: none;
+            display: flex;
+            align-items: baseline;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+        .storm-names summary::-webkit-details-marker { display: none; }
+        .storm-names summary::before {
+            content: '▶';
+            font-size: 0.75rem;
+            color: #2f9fff;
+            transition: transform 0.15s ease;
+        }
+        .storm-names[open] summary::before { transform: rotate(90deg); }
+        .storm-names summary small {
+            font-weight: 500;
+            font-size: 0.78rem;
+            color: #5f83ad;
+            margin-left: auto;
+            text-align: right;
+        }
+        .storm-names-body { padding: 0 16px 16px; }
+        .storm-names-note {
+            margin: 0 0 12px;
+            font-size: 0.85rem;
+            color: #35516f;
+            line-height: 1.6;
+            padding-bottom: 10px;
+            border-bottom: 1px dashed rgba(74, 124, 201, 0.25);
+        }
+        .storm-active { margin: 12px 0; }
+        .storm-active-title {
+            font-size: 0.85rem;
+            font-weight: 700;
+            color: #0b5c8f;
+            margin-bottom: 6px;
+        }
+        .storm-active-storm {
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            padding: 7px 12px;
+            margin: 0 6px 6px 0;
+            border-radius: 999px;
+            background: rgba(255, 122, 89, 0.14);
+            border: 1px solid rgba(224, 36, 14, 0.4);
+            color: #8c2106;
+            font-weight: 700;
+            font-size: 0.85rem;
+            text-decoration: none;
+        }
+        .storm-active-storm small { font-weight: 500; opacity: 0.85; }
+        .storm-active-list { display: flex; flex-direction: column; gap: 6px; }
+        .storm-active-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 11px;
+            border-radius: 12px;
+            background: rgba(255, 122, 89, 0.12);
+            border: 1px solid rgba(224, 36, 14, 0.32);
+            color: #3a1c08;
+            font-size: 0.85rem;
+            text-decoration: none;
+            transition: background 0.12s ease, border-color 0.12s ease;
+        }
+        .storm-active-row:hover { background: rgba(255, 122, 89, 0.2); border-color: rgba(224, 36, 14, 0.55); }
+        .storm-rank {
+            flex: 0 0 auto;
+            min-width: 22px;
+            height: 22px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 50%;
+            background: rgba(15, 60, 110, 0.9);
+            color: #fff;
+            font-weight: 800;
+            font-size: 0.78rem;
+        }
+        .storm-name-cell {
+            flex: 1 1 auto;
+            min-width: 0;
+            display: flex;
+            flex-direction: column;
+            line-height: 1.3;
+        }
+        .storm-name-cell b { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .storm-name-cell small { font-weight: 500; opacity: 0.8; font-size: 0.7rem; }
+        .storm-cat {
+            flex: 0 0 auto;
+            font-size: 0.72rem;
+            font-weight: 700;
+            padding: 3px 8px;
+            border-radius: 999px;
+            background: rgba(224, 36, 14, 0.14);
+            border: 1px solid rgba(224, 36, 14, 0.4);
+        }
+        .storm-wind {
+            flex: 0 0 auto;
+            text-align: right;
+        }
+        .storm-wind b { font-weight: 800; font-size: 0.8rem; }
+        .storm-wind small { display: block; font-weight: 500; font-size: 0.68rem; opacity: 0.85; }
+        .storm-list-title {
+            font-weight: 700;
+            color: #244b7a;
+            font-size: 0.9rem;
+            margin: 14px 0 8px;
+        }
+        .storm-list-chips {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+        }
+        .storm-names-chip {
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            padding: 6px 10px;
+            border-radius: 999px;
+            background: rgba(47, 159, 255, 0.1);
+            border: 1px solid rgba(47, 159, 255, 0.3);
+            color: #15527f;
+            font-size: 0.82rem;
+            font-weight: 600;
+        }
+        .storm-names-chip.active {
+            background: rgba(224, 36, 14, 0.12);
+            border-color: rgba(224, 36, 14, 0.5);
+            color: #8c2106;
+            box-shadow: 0 0 0 3px rgba(224, 36, 14, 0.1);
+        }
+        .storm-names-foot {
+            margin: 12px 0 0;
+            font-size: 0.75rem;
+            color: #5f83ad;
+            line-height: 1.5;
+        }
+        .storm-names-foot a { color: #1b6fd8; }
+
+        /* Ocean references reuse the storm panels, with wrapping rows on phones. */
+        .ocean-list { list-style: none; padding: 0; margin: 10px 0; display: grid; gap: 8px; }
+        .ocean-row { padding: 10px 12px; border: 1px solid rgba(31, 150, 220, 0.35); border-radius: 12px; background: rgba(31, 150, 220, 0.09); color: #12324f; }
+        .ocean-row > b { display: block; margin-bottom: 6px; font-size: 0.88rem; }
+        .ocean-metrics { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 0.82rem; line-height: 1.6; }
+        .ocean-intensity { font-weight: 700; color: #8c2106; }
+        .ocean-row small { display: block; margin-top: 4px; line-height: 1.5; }
+
+        /* ===== ⭕ Earthquakes + 🌊 tsunamis (globe layers) ===== */
+        .seismic-block { margin: 14px 0 0; }
+        .seismic-row {
+            display: flex;
+            align-items: flex-start;
+            gap: 8px;
+            padding: 8px 11px;
+            border-radius: 12px;
+            background: rgba(255, 255, 255, 0.6);
+            border: 1px solid rgba(74, 124, 201, 0.3);
+            color: #12324f;
+            font-size: 0.85rem;
+            text-decoration: none;
+            transition: background 0.12s ease, border-color 0.12s ease;
+        }
+        .seismic-row.quake { background: rgba(232, 136, 12, 0.12); border-color: rgba(224, 69, 28, 0.32); }
+        .seismic-row.quake:hover { background: rgba(232, 136, 12, 0.2); border-color: rgba(224, 69, 28, 0.55); }
+        .seismic-row.tsunami { background: rgba(31, 150, 220, 0.12); border-color: rgba(31, 150, 220, 0.4); }
+        .seismic-row.tsunami:hover { background: rgba(31, 150, 220, 0.2); border-color: rgba(31, 150, 220, 0.65); }
+        .seismic-mag {
+            flex: 0 0 auto;
+            min-width: 42px;
+            padding: 4px 6px;
+            border-radius: 9px;
+            background: #4a7cc9;
+            color: #fff;
+            font-weight: 800;
+            font-size: 0.8rem;
+            text-align: center;
+        }
+        .seismic-mag.m4 { background: #c9a227; }
+        .seismic-mag.m5 { background: #e8880c; }
+        .seismic-mag.m6 { background: #e0451c; }
+        .seismic-mag.m7 { background: #a6121b; }
+        .seismic-tag {
+            flex: 0 0 auto;
+            min-width: 42px;
+            padding: 4px 6px;
+            border-radius: 9px;
+            background: #5f83ad;
+            color: #fff;
+            font-weight: 800;
+            font-size: 0.7rem;
+            letter-spacing: 0.02em;
+            text-align: center;
+        }
+        .seismic-tag.warning { background: #c3161c; }
+        .seismic-tag.advisory { background: #e8880c; }
+        .seismic-tag.watch { background: #c9a227; }
+        .seismic-info { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+        .seismic-info small { font-weight: 500; opacity: 0.82; }
+        .seismic-empty { margin: 4px 0 0; font-size: 0.82rem; color: #5f83ad; line-height: 1.6; }
+        .seismic-wave { color: #0b5c8f; font-weight: 700; }
+
+        /* ===== 🌋 Volcano rows (same card layout as the seismic rows, lava colours) ===== */
+        .seismic-row.volcano { background: rgba(232, 76, 12, 0.13); border-color: rgba(232, 76, 12, 0.38); }
+        .seismic-row.volcano:hover { background: rgba(232, 76, 12, 0.22); border-color: rgba(255, 96, 16, 0.6); }
+        .seismic-row.volcano .seismic-info b { color: #8a2c05; }
+        /* ===== 🔥 Active wildfire rows ===== */
+        .seismic-row.fire { background: rgba(255, 92, 24, 0.13); border-color: rgba(255, 108, 32, 0.42); }
+        .seismic-row.fire:hover { background: rgba(255, 108, 32, 0.22); border-color: rgba(255, 146, 54, 0.68); }
+        .seismic-row.fire .seismic-info b { color: #8a2c05; }
+        .seismic-tag.fire { background: #e64a0b; }
+        .seismic-tag.fire.prescribed { background: #8a5a4a; }
+        /* The wildfire flame is lit only while EONET actually reports open fires. */
+        .globe-legend-chip .fire-icon {
+            display: inline-block;
+            filter: grayscale(1) brightness(0.72);
+            opacity: 0.58;
+            transform: scale(0.92);
+            transition: filter 0.2s ease, opacity 0.2s ease, transform 0.2s ease;
+        }
+        .globe-legend-chip.has-active-fires .fire-icon {
+            filter: drop-shadow(0 0 4px rgba(255, 92, 20, 0.95)) drop-shadow(0 0 9px rgba(255, 190, 40, 0.7));
+            opacity: 1;
+            transform: scale(1.12);
+            animation: globe-fire-flicker 1.25s ease-in-out infinite;
+        }
+        @keyframes globe-fire-flicker {
+            0%, 100% { transform: scale(1.08) rotate(-1deg); }
+            50% { transform: scale(1.18) rotate(1deg); }
+        }
+        @media (prefers-reduced-motion: reduce) {
+            .globe-legend-chip.has-active-fires .fire-icon { animation: none; }
+        }
+
+        /* ===== 🪨 mudslides & 🏔️ avalanches (globe layers) ===== */
+        .seismic-row.mudslide { background: rgba(150, 92, 40, 0.14); border-color: rgba(140, 85, 40, 0.42); }
+        .seismic-row.mudslide:hover { background: rgba(150, 92, 40, 0.24); border-color: rgba(170, 105, 50, 0.7); }
+        .seismic-row.mudslide .seismic-info b { color: #6d3f13; }
+        .seismic-tag.mudslide { background: #8a5a2b; }
+        .seismic-row.avalanche { background: rgba(72, 138, 208, 0.14); border-color: rgba(72, 138, 208, 0.42); }
+        .seismic-row.avalanche:hover { background: rgba(72, 138, 208, 0.24); border-color: rgba(102, 168, 238, 0.7); }
+        .seismic-row.avalanche .seismic-info b { color: #14476f; }
+        .seismic-tag.avalanche { background: #2f6ea8; }
+        .seismic-tag.avalanche.danger1 { background: #2f9e5f; }
+        .seismic-tag.avalanche.danger2 { background: #c9a227; }
+        .seismic-tag.avalanche.danger3 { background: #e2800c; }
+        .seismic-tag.avalanche.danger4 { background: #d3381c; }
+        .seismic-tag.avalanche.danger5 { background: #8c1414; }
+        /* 🏜️ Saharan dust: the row/tag wear the ochre of the haze itself, darker
+           as the modelled dust load climbs (hazy → thick → severe). */
+        .seismic-row.dust { background: rgba(198, 160, 92, 0.16); border-color: rgba(180, 138, 66, 0.45); }
+        .seismic-row.dust:hover { background: rgba(198, 160, 92, 0.28); border-color: rgba(206, 164, 84, 0.72); }
+        .seismic-row.dust .seismic-info b { color: #6a4611; }
+        .seismic-tag.dust { background: #a5762a; }
+        .seismic-tag.dust.level2 { background: #c08a2c; }
+        .seismic-tag.dust.level3 { background: #8c5a12; }
+        /* Modelled (not official) rows wear a dashed frame so they can never be
+           mistaken for a warning that came from an authority. */
+        .seismic-row.modelled { border-style: dashed; }
+        /* A chip's icon lights up while its layer has something to show. */
+        .globe-legend-chip .chip-icon { display: inline-block; transition: filter 0.2s ease, transform 0.2s ease; }
+        /* Mud + avalanche chips use a painted badge (not a pale emoji) so they
+           stay readable on the white legend bar. */
+        .globe-legend-chip .chip-badge {
+            display: inline-flex; align-items: center; justify-content: center;
+            width: 1.35em; height: 1.35em; border-radius: 50%;
+            font-size: 0.82em; font-weight: 800; line-height: 1;
+            color: #fff; flex: 0 0 auto;
+        }
+        /* 🪨 mudslides = luminous fluorescent GREEN circle. */
+        .globe-legend-chip .chip-badge--mud {
+            background: radial-gradient(circle at 35% 30%, #eaffd6 0%, #57ff6a 40%, #00e04a 72%, #00912b 100%);
+            border: 2px solid #f2fff4;
+            box-shadow: 0 0 0 1.5px #008a2a,
+                        0 0 6px 2px rgba(74, 255, 122, 0.9),
+                        0 0 14px 5px rgba(40, 255, 110, 0.5);
+            color: #04350f;
+            text-shadow: 0 0 5px rgba(255, 255, 255, 0.9);
+            animation: chip-glow-mud 1.7s ease-in-out infinite;
+        }
+        /* 🏔️ snow avalanches = luminous fluorescent BLUE circle. */
+        .globe-legend-chip .chip-badge--snow {
+            background: radial-gradient(circle at 35% 30%, #e6f7ff 0%, #57c8ff 40%, #0a8dff 72%, #0056d6 100%);
+            border: 2px solid #eef8ff;
+            box-shadow: 0 0 0 1.5px #0056d6,
+                        0 0 6px 2px rgba(90, 190, 255, 0.9),
+                        0 0 14px 5px rgba(60, 160, 255, 0.5);
+            color: #04203f;
+            text-shadow: 0 0 5px rgba(255, 255, 255, 0.9);
+            animation: chip-glow-snow 1.7s ease-in-out infinite;
+        }
+        /* The halos breathe so the icons literally look luminous. */
+        @keyframes chip-glow-mud {
+            0%, 100% { box-shadow: 0 0 0 1.5px #008a2a, 0 0 6px 2px rgba(74, 255, 122, 0.85), 0 0 13px 5px rgba(40, 255, 110, 0.42); }
+            50% { box-shadow: 0 0 0 1.5px #008a2a, 0 0 11px 4px rgba(74, 255, 122, 1), 0 0 24px 10px rgba(40, 255, 110, 0.72); }
+        }
+        @keyframes chip-glow-snow {
+            0%, 100% { box-shadow: 0 0 0 1.5px #0056d6, 0 0 6px 2px rgba(90, 190, 255, 0.85), 0 0 13px 5px rgba(60, 160, 255, 0.42); }
+            50% { box-shadow: 0 0 0 1.5px #0056d6, 0 0 11px 4px rgba(90, 190, 255, 1), 0 0 24px 10px rgba(60, 160, 255, 0.72); }
+        }
+        .globe-legend-chip.has-active-layer .chip-icon {
+            filter: drop-shadow(0 0 4px rgba(255, 255, 255, 0.85));
+            transform: scale(1.12);
+            animation: globe-layer-pulse 1.6s ease-in-out infinite;
+        }
+        @keyframes globe-layer-pulse {
+            0%, 100% { transform: scale(1.08); }
+            50% { transform: scale(1.18); }
+        }
+        @media (prefers-reduced-motion: reduce) {
+            .globe-legend-chip.has-active-layer .chip-icon { animation: none; }
+            .globe-legend-chip .chip-badge--mud,
+            .globe-legend-chip .chip-badge--snow { animation: none; }
+        }
+
+        .seismic-tag.volcano { background: #e04a0c; font-size: 0.95rem; }
+        .seismic-tag.volcano.restless { background: #8a5a4a; }

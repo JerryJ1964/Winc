@@ -7,15 +7,15 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+const html = ['index.html', 'app.js', 'style.css'].map((fn) => fs.readFileSync(path.join(__dirname, '..', fn), 'utf8')).join('\n');
 
 test('radar grid builds rounded organic blobs, not sharp rectangles', () => {
-  // 28-vertex rounded blob ring (superellipse + wobble) replaces the old
+  // Multi-vertex rounded blob ring (superellipse + cloud-type wobble) replaces the old
   // 4-corner rectangle polygon.
   assert.match(html, /blobRing\(aLon, aLat/);
-  assert.match(html, /const N = 28, ring = \[\]/);
-  assert.match(html, /Math\.pow\(Math\.abs\(Math\.cos\(a\)\), 0\.72\)/);
-  assert.match(html, /ring\.push\(ring\[0\]\.slice\(\)\)/);
+  assert.match(html, /function localMapGLBlobRing/);
+  assert.match(html, /Math\.pow\(Math\.abs\(Math\.cos\(a\)/, 'superellipse exponentiation still present');
+  assert.match(html, /ring\.push\(ring\[0\]\.slice\(\)/, 'ring closes with duplicated first vertex');
   assert.match(html, /soft overlapping/);
   assert.doesNotMatch(html, /const hx = dLon \* 0\.95/,
     'old sharp-rectangle half-extents are gone');

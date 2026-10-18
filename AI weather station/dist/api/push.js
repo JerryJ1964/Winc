@@ -26,6 +26,55 @@
 
 const webpush = require('web-push');
 const weather = require('./weather');
+// ── Upstream discipline (the 504 fix) ──────────────────────────────────
+// The cron-driven "notify" run touches every subscription in turn, so one
+// stalled provider or push endpoint used to be enough to drag the function
+// past its maxDuration — Vercel then answered 504 and the whole run's state
+// was lost. Every upstream call now carries its own ceiling, the per-user
+// checks run concurrently in a small pool, and the run stops at a deadline so
+// it always answers with whatever it managed to send.
+const KV_TIMEOUT_MS = Number(process.env.KV_TIMEOUT_MS || 5000);
+const PUSH_SEND_TIMEOUT_MS = Number(process.env.PUSH_SEND_TIMEOUT_MS || 8000);
+const NOTIFY_BUDGET_MS = Number(process.env.PUSH_NOTIFY_BUDGET_MS || 45000);
+const NOTIFY_CONCURRENCY = Number(process.env.PUSH_NOTIFY_CONCURRENCY || 4);
+
+function timeoutSignal(ms) {
+  return typeof AbortSignal?.timeout === 'function' ? AbortSignal.timeout(ms) : undefined;
+}
+
+// Resolve-or-die wrapper: a hanging upstream or push endpoint must never decide
+// how long this function runs.
+function withBudget(promise, ms, label) {
+  let timer;
+  const deadline = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${label}: exceeded ${ms} ms budget`)), ms);
+    if (timer && typeof timer.unref === 'function') timer.unref();
+  });
+  return Promise.race([promise, deadline]).finally(() => clearTimeout(timer));
+}
+
+// web-push talks to the browser vendor's endpoint over plain https (no fetch,
+// so no AbortSignal) — the only way to keep a dead endpoint from stalling the
+// run is to race it against a deadline.
+function sendPushNotification(subscription, payload, options) {
+  return withBudget(webpush.sendNotification(subscription, payload, options), PUSH_SEND_TIMEOUT_MS, 'web-push send');
+}
+
+// Small worker pool: N subscriptions in flight instead of one at a time, so a
+// growing subscriber list cannot stretch the daily cron run past its deadline.
+async function runBounded(items, limit, worker) {
+  let index = 0;
+  const width = Math.max(1, Math.min(limit, items.length));
+  const runners = Array.from({ length: width }, async () => {
+    while (index < items.length) {
+      const current = index++;
+      await worker(items[current]);
+    }
+  });
+  await Promise.all(runners);
+}
+
+
 
 // ----- VAPID keys ----------------------------------------------------
 // In production set VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY / VAPID_SUBJECT
@@ -52,6 +101,7 @@ async function kvCommand(pathAndQuery, options) {
   if (!kvEnabled()) return undefined;
   const url = `${process.env.KV_REST_API_URL}${pathAndQuery}`;
   const response = await fetch(url, {
+    signal: timeoutSignal(KV_TIMEOUT_MS),
     ...options,
     headers: {
       Authorization: `Bearer ${process.env.KV_REST_API_TOKEN}`,
@@ -152,10 +202,14 @@ async function checkAndNotify(record) {
   });
 
   try {
-    await webpush.sendNotification(
-      { endpoint, keys: { p256dh: record.p256dh, auth: record.auth } },
-      payload,
-      { TTL: 60 * 60 }
+    await withBudget(
+      webpush.sendNotification(
+        { endpoint, keys: { p256dh: record.p256dh, auth: record.auth } },
+        payload,
+        { TTL: 60 * 60 }
+      ),
+      PUSH_SEND_TIMEOUT_MS,
+      `push send for ${label || endpoint.slice(0, 24)}`
     );
     record.lastSignature = signature;
     record.lastSentAt = now;
@@ -239,9 +293,11 @@ async function handler(req, res) {
       const target = body.endpoint ? MEMORY_SUBS.get(body.endpoint) : undefined;
       const records = target ? [target] : Array.from(MEMORY_SUBS.values());
       let sent = 0;
-      for (const record of records) {
+      const testDeadline = Date.now() + NOTIFY_BUDGET_MS;
+      await runBounded(records, NOTIFY_CONCURRENCY, async (record) => {
+        if (Date.now() > testDeadline) return;
         try {
-          await webpush.sendNotification(
+          await sendPushNotification(
             { endpoint: record.endpoint, keys: { p256dh: record.p256dh, auth: record.auth } },
             JSON.stringify({
               title: '✅ AI Weather Station',
@@ -256,7 +312,7 @@ async function handler(req, res) {
         } catch (error) {
           if (error?.statusCode === 404 || error?.statusCode === 410) removeSubscription(record.endpoint);
         }
-      }
+      });
       return respond(200, { ok: true, sent, active: MEMORY_SUBS.size });
     }
 
@@ -267,14 +323,35 @@ async function handler(req, res) {
       }
       let checked = 0;
       let pushed = 0;
+      let skipped = 0;
       if (MEMORY_SUBS.size > 0) {
-        for (const record of Array.from(MEMORY_SUBS.values())) {
+        // Deadline instead of an unbounded sequential loop: subscribers that
+        // were not reached in time are simply picked up by the next cron run,
+        // but this function always answers — and always saves the state it did
+        // collect — well before maxDuration turns the request into a 504.
+        const deadlineAt = Date.now() + NOTIFY_BUDGET_MS;
+        await runBounded(Array.from(MEMORY_SUBS.values()), NOTIFY_CONCURRENCY, async (record) => {
+          if (Date.now() > deadlineAt) {
+            skipped += 1;
+            return;
+          }
           checked += 1;
-          if (await checkAndNotify(record)) pushed += 1;
-        }
+          try {
+            if (await checkAndNotify(record)) pushed += 1;
+          } catch (error) {
+            console.warn('checkAndNotify failed for', record.label, error.message);
+          }
+        });
         await saveSubscriptions();
       }
-      return respond(200, { ok: true, checked, pushed, active: MEMORY_SUBS.size });
+      return respond(200, {
+        ok: true,
+        checked,
+        pushed,
+        skipped,
+        partial: skipped > 0,
+        active: MEMORY_SUBS.size,
+      });
     }
 
     return respond(400, {

@@ -1,3 +1,7 @@
+// build:enso-dial-20261014-1 — 🌊 adjustable ENSO dial (-3..+3 °C) + live NOAA ONI
+// (cached via /api/weather?action=enso — no new Vercel function, Hobby stays at
+// 12) + Celestia-credited bright-star sky (public-domain Yale BSC / Hipparcos
+// positions + JPL orbital elements + Messier/NGC facts, drawn on-device).
 const DEFAULT_LOCATION = 'Vlaardingen, Netherlands';
 // build:nowcast-20260827-1
 // build:alerts-20260829-1 — rain / hail / snow / wind-above-Beaufort-4 alert flags for push notifications
@@ -6,6 +10,32 @@ const DEFAULT_LOCATION = 'Vlaardingen, Netherlands';
 // build:holiday-week-20260918-1 — 🌤️ Honest day cards: the 3-day `forecast` Today/Tomorrow cards and the 14-day `forecast14` days only keep a rain icon on real rain (≥ 1 mm in the day or a ≥ 60 % peak chance); a dry "Patchy rain nearby" day (e.g. 0.51 mm / 45 %) reads ⛅/☁️/☀️ from its own daytime cloud cover instead of 🌧️ while the sun shines.
 const DEFAULT_LATITUDE = 51.9192;
 const DEFAULT_LONGITUDE = 4.3599;
+// ── Upstream discipline (the 504 fix) ──────────────────────────────────
+// Every outbound call carries an AbortSignal ceiling, and the request as a
+// whole carries one overall budget. A provider that stops answering therefore
+// costs us an honest fallback payload (HTTP 200) — never a Vercel
+// "504 Gateway Timeout" from the function running past its maxDuration.
+// Both knobs are env-tunable so the timeout path can be exercised locally.
+const UPSTREAM_TIMEOUT_MS = Number(process.env.UPSTREAM_TIMEOUT_MS || 8000);
+const REQUEST_BUDGET_MS = Number(process.env.REQUEST_BUDGET_MS || 12000);
+
+// AbortSignal.timeout() exists in every Node ≥ 17.3 (Vercel runs 24.x); the
+// guard keeps this file loadable in older toolchains and in unit tests that
+// stub the globals.
+function timeoutSignal(ms) {
+  return typeof AbortSignal?.timeout === 'function' ? AbortSignal.timeout(ms) : undefined;
+}
+
+// Resolve-or-die wrapper: a hanging upstream must never decide how long a
+// request takes. Rejects after `ms` so the caller's fallback path runs.
+function withBudget(promise, ms, label) {
+  let timer;
+  const deadline = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${label}: exceeded ${ms} ms budget`)), ms);
+    if (timer && typeof timer.unref === 'function') timer.unref();
+  });
+  return Promise.race([promise, deadline]).finally(() => clearTimeout(timer));
+}
 
 const COORDINATE_PATTERN = /^\s*([-+]?\d+(?:\.\d+)?)\s*[,;]\s*([-+]?\d+(?:\.\d+)?)\s*$/;
 
@@ -129,6 +159,147 @@ function mapWeatherCodeToCondition(code, isDay) {
     if (code === 1) return { condition: 'Mainly Clear', icon: '🌙' };
   }
   return mapping[code] ?? { condition: 'Unknown', icon: '🌡️' };
+}
+// ===== ☀️ Solar data (Open-Meteo keyless, shared by both providers) =========
+// One call covers solar intensity (shortwave radiation), UV index and
+// sunshine duration. Cached server-side for 15 minutes per ~5 km area so the
+// new ☀️ Solar tab can refresh every 15 minutes without extra upstream cost.
+const SOLAR_CACHE_TTL_MS = 15 * 60 * 1000;
+const SOLAR_CACHE_MAX = 64;
+const solarCache = new Map();
+
+function uvLevelFor(uvIndex) {
+  const v = typeof uvIndex === 'number' && Number.isFinite(uvIndex) ? uvIndex : null;
+  if (v == null) return { level: 'unknown', label: 'Unknown', advice: 'UV data is temporarily unavailable.' };
+  if (v < 1) return { level: 'low', label: 'Low', advice: 'No protection needed.' };
+  if (v < 3) return { level: 'low', label: 'Low', advice: 'No protection needed for most people.' };
+  if (v < 6) return { level: 'moderate', label: 'Moderate', advice: 'Seek shade around midday; wear sunglasses.' };
+  if (v < 8) return { level: 'high', label: 'High', advice: 'Seek shade, wear sunscreen SPF 30+, a hat and sunglasses.' };
+  if (v < 11) return { level: 'very-high', label: 'Very high', advice: 'Avoid midday sun — sunscreen SPF 30+, hat, sunglasses and shade.' };
+  return { level: 'extreme', label: 'Extreme', advice: 'Stay indoors around midday — unprotected skin burns in minutes.' };
+}
+
+function buildSolarResponse(latitude, longitude, payload) {
+  const current = payload?.current ?? {};
+  const daily = payload?.daily ?? {};
+  const hourly = payload?.hourly ?? null;
+  const shortwave = typeof current.shortwave_radiation === 'number' ? Math.round(current.shortwave_radiation) : null;
+  const direct = typeof current.direct_radiation === 'number' ? Math.round(current.direct_radiation) : null;
+  const diffuse = typeof current.diffuse_radiation === 'number' ? Math.round(current.diffuse_radiation) : null;
+  const uvIndex = typeof current.uv_index === 'number' ? Math.round(current.uv_index * 10) / 10 : null;
+  const uvClear = typeof current.uv_index_clear_sky === 'number' ? Math.round(current.uv_index_clear_sky * 10) / 10 : null;
+  const sunshineSeconds = typeof daily.sunshine_duration?.[0] === 'number' ? Math.round(daily.sunshine_duration[0]) : null;
+  const daylightSeconds = typeof daily.daylight_duration?.[0] === 'number' ? Math.round(daily.daylight_duration[0]) : null;
+  const uv = uvLevelFor(uvIndex);
+  return {
+    source: 'open-meteo',
+    latitude: Math.round(latitude * 100) / 100,
+    longitude: Math.round(longitude * 100) / 100,
+    updated: new Date().toISOString(),
+    shortwaveWm2: shortwave,
+    directWm2: direct,
+    diffuseWm2: diffuse,
+    uvIndex,
+    uvClearSky: uvClear,
+    uvLevel: uv.level,
+    uvLabel: uv.label,
+    uvAdvice: uv.advice,
+    sunshineSeconds,
+    daylightSeconds,
+    sunrise: daily.sunrise?.[0] || null,
+    sunset: daily.sunset?.[0] || null,
+    hourly: pickSolarHourly(hourly, Date.now(), 12),
+    isDay: (current.is_day ?? 1) === 1,
+  };
+}
+
+function pickSolarHourly(hourly, nowMs, count) {
+  if (!hourly || !Array.isArray(hourly.time)) return [];
+  let start = 0;
+  for (let i = 0; i < hourly.time.length; i += 1) {
+    const t = Date.parse(hourly.time[i]);
+    if (Number.isFinite(t) && t <= nowMs) start = i;
+    else if (Number.isFinite(t)) break;
+  }
+  const out = [];
+  for (let i = start; i < hourly.time.length && out.length < (count || 12); i += 1) {
+    const sw = hourly.shortwave_radiation?.[i];
+    const uv = hourly.uv_index?.[i];
+    const t = hourly.temperature_2m?.[i];
+    out.push({
+      time: hourly.time[i] || '',
+      shortwaveWm2: typeof sw === 'number' && Number.isFinite(sw) ? Math.round(sw) : null,
+      uvIndex: typeof uv === 'number' && Number.isFinite(uv) ? Math.round(uv * 10) / 10 : null,
+      tempC: typeof t === 'number' && Number.isFinite(t) ? Math.round(t * 10) / 10 : null,
+      isDay: (hourly.is_day?.[i] ?? 1) === 1
+    });
+  }
+  return out;
+}
+
+async function fetchSolarData(latitude, longitude) {
+  const key = `${Number(latitude).toFixed(2)},${Number(longitude).toFixed(2)}`;
+  const now = Date.now();
+  const cached = solarCache.get(key);
+  if (cached && now - cached.t < SOLAR_CACHE_TTL_MS) return { ...cached.data, cached: true };
+  const url =
+    `https://api.open-meteo.com/v1/forecast?latitude=${latitude}&longitude=${longitude}` +
+    `&current=shortwave_radiation,direct_radiation,diffuse_radiation,uv_index,uv_index_clear_sky,is_day` +
+    `&hourly=shortwave_radiation,uv_index,is_day,temperature_2m` +
+    `&daily=sunrise,sunset,sunshine_duration,daylight_duration&timezone=auto&forecast_days=2`;
+  const response = await fetch(url, { signal: timeoutSignal(UPSTREAM_TIMEOUT_MS) });
+  if (!response.ok) throw new Error(`Solar HTTP ${response.status}`);
+  const payload = await response.json();
+  const data = buildSolarResponse(latitude, longitude, payload);
+  solarCache.set(key, { t: now, data });
+  if (solarCache.size > SOLAR_CACHE_MAX) solarCache.delete(solarCache.keys().next().value);
+  return { ...data, cached: false };
+}
+// ===== 🌊 ENSO / ONI (NOAA CPC, public domain, keyless) ====================
+// Live Oceanic Niño Index served through THIS route (?action=enso) so the
+// Hobby project stays at 12 functions. Cached 24 h — ONI updates monthly.
+// Falls back to an honest unavailable payload, never a 504.
+const ENSO_FEED = 'https://www.cpc.ncep.noaa.gov/data/indices/oni.ascii.txt';
+const ENSO_TTL_MS = 24 * 60 * 60 * 1000;
+let ensoCache = { t: 0, data: null };
+function parseOniText(text) {
+  const rows = [];
+  for (const line of String(text || '').split(/\r?\n/)) {
+    const m = line.trim().match(/^([A-Z]{3})\s+(\d{4})\s+([-\d.]+)\s+([-\d.]+)/);
+    if (!m) continue;
+    rows.push({ season: m[1] + ' ' + m[2], year: Number(m[2]), total: Number(m[3]), anomaly: Number(m[4]) });
+  }
+  return rows.filter((r) => Number.isFinite(r.anomaly));
+}
+function ensoPhaseFor(anomaly) {
+  if (anomaly == null || !Number.isFinite(anomaly)) return { phase: 'unknown', label: 'Unknown' };
+  if (anomaly >= 0.5) return { phase: 'elnino', label: 'El Niño' };
+  if (anomaly <= -0.5) return { phase: 'lanina', label: 'La Niña' };
+  return { phase: 'neutral', label: 'Neutral' };
+}
+async function fetchEnsoData() {
+  const now = Date.now();
+  if (ensoCache.data && now - ensoCache.t < ENSO_TTL_MS) return { ...ensoCache.data, cached: true };
+  const response = await fetch(ENSO_FEED, { signal: timeoutSignal(UPSTREAM_TIMEOUT_MS) });
+  if (!response.ok) throw new Error(`ENSO HTTP ${response.status}`);
+  const rows = parseOniText(await response.text());
+  if (!rows.length) throw new Error('ENSO feed parsed to zero rows');
+  const latest = rows[rows.length - 1];
+  const phase = ensoPhaseFor(latest.anomaly);
+  const body = {
+    source: ENSO_FEED,
+    feedTitle: 'NOAA CPC Oceanic Niño Index (ERSST)',
+    updated: new Date().toISOString(),
+    available: true,
+    season: latest.season,
+    year: latest.year,
+    oni: Math.round(latest.anomaly * 100) / 100,
+    phase: phase.phase,
+    phaseLabel: phase.label,
+    cached: false
+  };
+  ensoCache = { t: now, data: body };
+  return body;
 }
 // ===== 🌦️ WeatherAPI.com provider (optional, keyed) ====================
 // Set WEATHERAPI_KEY (free plan: 100,000 calls/month, 3-day forecast, no
@@ -789,7 +960,7 @@ async function checkAlertsForCoords(latitude, longitude) {
   }
 
   const url = `https://api.open-meteo.com/v1/forecast?latitude=${latitude}&longitude=${longitude}&minutely_15=weather_code,precipitation,precipitation_probability,wind_speed_10m&forecast_minutely_15=${NOWCAST_SLOTS}&timezone=auto`;
-  const response = await fetch(url);
+  const response = await fetch(url, { signal: timeoutSignal(UPSTREAM_TIMEOUT_MS) });
   if (!response.ok) throw new Error(`Open-Meteo HTTP ${response.status}`);
   const data = await response.json();
   const m15 = data.minutely_15;
@@ -1383,14 +1554,15 @@ async function fetchWeatherData(location) {
 
   // Shared side-data for both providers: the 5×5 top-down local map (built
   // from Open-Meteo minutely_15 — WeatherAPI's free plan has no 15-minute
-  // data or grid), the nearby city/village names (Wikipedia geosearch) and
+  // data or grid), the nearby city/village names (Wikipedia geosearch),
   // the 📅 14-day daily forecast (also Open-Meteo — WeatherAPI's free plan
-  // caps at 3 days). All three are cached server-side, so refreshing the
-  // page costs nothing extra.
-  const [localMap, nearbyPlaces, dailyForecast14] = await Promise.all([
+  // caps at 3 days) and the ☀️ solar block (radiation + UV + sunshine).
+  // All four are cached server-side, so refreshing the page costs nothing extra.
+  const [localMap, nearbyPlaces, dailyForecast14, solar] = await Promise.all([
     buildLocalMap(geocoded.latitude, geocoded.longitude).catch(() => ({ cells: [] })),
     getNearbyPlaces(geocoded.latitude, geocoded.longitude).catch(() => []),
-    fetchDailyForecast14(geocoded.latitude, geocoded.longitude).catch(() => [])
+    fetchDailyForecast14(geocoded.latitude, geocoded.longitude).catch(() => []),
+    fetchSolarData(geocoded.latitude, geocoded.longitude).catch(() => null)
   ]);
 
   // Provider routing: WeatherAPI.com first when WEATHERAPI_KEY is set, with
@@ -1398,13 +1570,13 @@ async function fetchWeatherData(location) {
   if (isWeatherApiEnabled()) {
     try {
       const wapi = await fetchWeatherApiWeather(geocoded);
-      return { ...wapi, localMap, nearbyPlaces, forecast14: dailyForecast14 };
+      return { ...wapi, localMap, nearbyPlaces, forecast14: dailyForecast14, solar: solar || undefined };
     } catch (error) {
       console.warn('WeatherAPI.com fetch failed, falling back to Open-Meteo.', error);
     }
   }
 
-  return fetchOpenMeteoWeather(geocoded, localMap, nearbyPlaces, dailyForecast14);
+  return fetchOpenMeteoWeather(geocoded, localMap, nearbyPlaces, dailyForecast14, solar);
 }
 
 // ===== Provider 1: WeatherAPI.com (keyed) ==============================
@@ -1546,7 +1718,7 @@ async function fetchWeatherApiWeather(geocoded) {
 }
 
 // ===== Provider 2: Open-Meteo (keyless fallback) =======================
-async function fetchOpenMeteoWeather(geocoded, localMap, nearbyPlaces, dailyForecast14) {
+async function fetchOpenMeteoWeather(geocoded, localMap, nearbyPlaces, dailyForecast14, solar) {
   const url = `https://api.open-meteo.com/v1/forecast?latitude=${geocoded.latitude}&longitude=${geocoded.longitude}&current=temperature_2m,apparent_temperature,relative_humidity_2m,wind_speed_10m,wind_direction_10m,weather_code,is_day,precipitation,precipitation_probability,cloud_cover,snowfall&minutely_15=temperature_2m,apparent_temperature,weather_code,precipitation,precipitation_probability,snowfall,wind_speed_10m,wind_direction_10m,uv_index,uv_index_clear_sky,cloud_cover,is_day&forecast_minutely_15=${NOWCAST_SLOTS}&daily=weathercode,temperature_2m_max,temperature_2m_min,apparent_temperature_max,apparent_temperature_min,wind_speed_10m_max,wind_direction_10m_dominant,relative_humidity_2m_max,relative_humidity_2m_min,precipitation_sum,precipitation_probability_max,cloud_cover_mean&timezone=auto`;
 
   const response = await fetch(url, { signal: AbortSignal.timeout(10000) });
@@ -1589,7 +1761,8 @@ async function fetchOpenMeteoWeather(geocoded, localMap, nearbyPlaces, dailyFore
     prediction: buildPrediction(mapped.condition, temperature, humidity),
     nowcast: buildNowcast(data),
     localMap,
-    nearbyPlaces
+    nearbyPlaces,
+    solar: solar || undefined
   };
 }
 
@@ -1618,8 +1791,31 @@ module.exports = async function handler(req, res) {
     location = typeof body?.location === 'string' ? body.location : undefined;
   }
 
+  // 🌊 Live ENSO dial value — same route, no new Vercel function.
+  if (req.method === 'GET' && String(query.action || '').toLowerCase() === 'enso') {
+    try {
+      const enso = await withBudget(fetchEnsoData(), UPSTREAM_TIMEOUT_MS, 'enso fetch');
+      res.setHeader('Content-Type', 'application/json; charset=utf-8');
+      res.setHeader('Cache-Control', 'public, max-age=86400, stale-while-revalidate=86400');
+      res.statusCode = 200;
+      res.end(JSON.stringify(enso));
+    } catch (error) {
+      console.error('ENSO fetch failed:', error);
+      res.setHeader('Content-Type', 'application/json; charset=utf-8');
+      res.statusCode = 200;
+      res.end(JSON.stringify({
+        source: ENSO_FEED, updated: new Date().toISOString(), available: false,
+        season: null, year: null, oni: null, phase: 'unknown', phaseLabel: 'Unknown', cached: false
+      }));
+    }
+    return;
+  }
+
   try {
-    const weatherData = await fetchWeatherData(location);
+    // Hard overall budget: if the geocoder, the provider or any side-data call
+    // stalls, we answer below with the honest fallback payload instead of
+    // running past maxDuration and letting Vercel hand the user a 504.
+    const weatherData = await withBudget(fetchWeatherData(location), REQUEST_BUDGET_MS, 'weather fetch');
     res.setHeader('Content-Type', 'application/json; charset=utf-8');
     res.statusCode = 200;
     res.end(JSON.stringify(weatherData));
@@ -1658,6 +1854,8 @@ module.exports = async function handler(req, res) {
         { day: 'Tomorrow', condition: 'Rain', icon: '🌧️', weatherCode: 61, high: 17, low: 12, humidity: 78, windSpeed: 18, windDirection: 'SW', beaufort: 5 },
         { day: 'Day After', condition: 'Partly Cloudy', icon: '⛅', weatherCode: 2, high: 18, low: 11, humidity: 55, windSpeed: 9, windDirection: 'NW', beaufort: 3 }
       ],
+      // NOTE: front-end getWeatherIcon() recomputes SVG icons from condition+weatherCode,
+      // so server-side emoji icons here are only a fallback for clients that don't recompute.
       nowcast: {
         timeline: [],
         alerts: [],
@@ -1678,4 +1876,4 @@ module.exports.buildAlerts = buildAlerts;
 module.exports.checkAlertsForCoords = checkAlertsForCoords;
 module.exports.windSpeedToBeaufort = windSpeedToBeaufort;
 // Internal helpers (for tests / debugging): WeatherAPI.com provider pieces.
-module.exports._internal = { buildWapiTimeline, mapWapiCodeToWmo, classifyLocalCell, mapWeatherCodeToCondition, buildNowcast, buildForecast14, buildForecast, buildForecast14DaySlots, meanWindDir, lerpHalfHour, pickHalfHourCode, fetchDailyForecast14, honestSlotWeather, honestDayWeather, SLOT_RAIN_MIN_MM, SLOT_RAIN_PROB_MIN, DAY_RAIN_MIN_MM, DAY_RAIN_PROB_MIN, FORECAST14_SLOTS_PER_DAY };
+module.exports._internal = { buildWapiTimeline, mapWapiCodeToWmo, classifyLocalCell, mapWeatherCodeToCondition, buildNowcast, buildForecast14, buildForecast, buildForecast14DaySlots, meanWindDir, lerpHalfHour, pickHalfHourCode, fetchDailyForecast14, honestSlotWeather, honestDayWeather, pickSolarHourly, SLOT_RAIN_MIN_MM, SLOT_RAIN_PROB_MIN, DAY_RAIN_MIN_MM, DAY_RAIN_PROB_MIN, FORECAST14_SLOTS_PER_DAY, parseOniText, ensoPhaseFor, fetchEnsoData, ENSO_FEED, ENSO_TTL_MS };
