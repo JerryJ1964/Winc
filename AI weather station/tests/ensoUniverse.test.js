@@ -54,14 +54,48 @@ test('Universe: real bright-star sky with Celestia credit (on-device, free)', ()
   assert.match(html, /Celestia/, 'Celestia is credited');
 });
 
-test('Universe rotation: Milky Way rigid turn + bounded sway, Sun locked to its arm; Local Group spins in place; Moon orbits Earth', () => {
+test('Universe: North Pole and South Pole views exist to check the Moon', () => {
+  assert.match(html, /data-universe="north"/, 'North Pole view button exists');
+  assert.match(html, /data-universe="south"/, 'South Pole view button exists');
+  assert.match(html, /function universePoleProject\(/, 'universePoleProject() projects a polar view');
+  assert.match(html, /function drawUniversePole\(/, 'drawUniversePole() paints the polar views');
+});
+
+test('Universe pole views: captions describe the tidally locked Moon', () => {
+  assert.match(html, /tidal lock/, 'pole view names the tidal lock');
+  assert.ok(!/never rotat/i.test(html), 'no pole caption repeats the "the Moon never rotates" myth');
+});
+
+test('Universe pole views: the tidally locked Moon rotates correctly from each pole', () => {
+  // drawUniversePole must exist and paint both polar views.
+  assert.match(html, /function drawUniversePole\(/, 'drawUniversePole() paints the polar views');
+  // Tidal lock: the Moon's face (mare) always aims at Earth, so the rotation is
+  // the screen angle from the Moon to Earth's centre — it is computed, not fixed.
+  assert.match(html, /Math\.atan2\(cy - mY, cx - mX\)/, 'pole Moon rotation aims at Earth (tidal lock)');
+  // The Moon's orbit is projected through orbitPoint(), which reverses the
+  // apparent node tilt between the North and South Pole views, so the orbit line
+  // is NOT the same from the two poles.
+  assert.match(html, /const orbitPoint\s*=\s*\(a\)/, 'orbitPoint() projects the Moon onto its orbit');
+  assert.match(html, /const nodeN\s*=\s*1\.0/, 'nodeN sets the North Pole node angle');
+assert.match(html, /const nodeS\s*=\s*nodeN \+ 0\.9/, 'nodeS sets the South Pole node angle');
+assert.match(html, /const node\s*=\s*north \? nodeN : nodeS/, 'node angle differs between poles');
+  assert.match(html, /north \? -ry : ry/, 'South Pole mirrors the Moon position on the orbit');
+  assert.match(html, /function universePoleProject\(/, 'universePoleProject() projects each polar view');
+});
+
+test('Universe rotation: Milky Way is a rigid density-wave turn on a logarithmic spiral, Sun locked to its arm; Local Group spins in place; Moon orbits Earth', () => {
   assert.match(html, /const rot = spin \* 0\.05/, 'Milky Way has one rigid disc turn');
-  assert.match(html, /const sway = st\.bar/, 'stars use a bounded sway (no accumulating shear)');
-  assert.match(html, /Math\.sin\(spin \* 0\.35/, 'sway is a sine wobble that cannot wind up');
+  assert.match(html, /function mwArmAngle\(rad, arm\)/, 'arms follow a logarithmic spiral (constant pitch angle)');
+  assert.match(html, /Math\.tan\(MW_PITCH\)/, 'the log spiral uses the Milky Way pitch angle');
+  assert.match(html, /const MW_PITCH = 20 \* Math\.PI \/ 180/, 'pitch ~20°: each arm sweeps under one turn bar-to-rim — a spiral, not concentric rings');
+  assert.match(html, /const MW_R0 = 0\.18/, 'arms ignite at the bar ends');
+  assert.match(html, /return arm \* \(2 \* Math\.PI \/ MW_ARMS\) - Math\.log\(r \/ MW_R0\) \/ Math\.tan\(MW_PITCH\)/, 'Milky Way arm winding runs AGAINST the turn: arms trail, never screw in');
   assert.ok(!html.includes('spin * shear'), 'the old unbounded spin*shear drift is gone');
-  assert.match(html, /const sunAng = 2\.35 \+ rot;/, 'the Sun rides the arm turn exactly — no drift');
+  assert.match(html, /const sunAng = mwArmAngle\(sunRad, 1\) \+ 0\.12 \+ rot;/, 'the Sun sits ON the arm equation and rides the turn exactly — no drift');
   assert.ok(!html.includes('rot * 0.8'), 'the old 0.8× Sun drift is gone');
-  assert.match(html, /const ang = spin \* 0\.06 \+ arm \* Math\.PI/, 'each Local Group galaxy spins around its own centre');
+  assert.match(html, /const ang = spin \* 0\.06 \+ arm \* Math\.PI - Math\.log\(Math\.max\(gR0, rr \/ R\) \/ gR0\) \/ Math\.tan\(gPitch\)/, 'each Local Group galaxy spins around its own centre with trailing arms');
+  assert.match(html, /const ax = gX\(-0\.42\), ay = gY\(-0\.28\), ar = gR\(0\.30\)/, 'Andromeda layout position + radius are zoom-aware');
+  assert.match(html, /drawUniverseGalaxyAt\(ctx, ax, ay, ar, 3\.7, 0\.9, 0\.5\)/, 'Andromeda winds ~0.9 turns — sub-turn sweep, never a bullseye');
   assert.match(html, /const spin = universeMotionOK \? universeT : 0/, 'rotation freezes under prefers-reduced-motion');
   assert.match(html, /const moonAng = -0\.9 \+ moonSpin \* \(2 \* Math\.PI \/ 6\)/, 'Earth view shows the Moon orbiting Earth');
   assert.match(html, /🌙 Moon/, 'Moon is labelled in the Earth view');
@@ -90,6 +124,143 @@ test('Universe: Moon orbits pass BEHIND Earth and IN FRONT (depth-correct draw o
   assert.ok(sysBehind > -1 && sysBehind < planetFill, 'System back-side Moon drawn BEFORE Earth globe');
   assert.ok(html.indexOf('ctx.ellipse(px, py, moonInfo.mR') > planetFill, 'System near lunar arc drawn AFTER Earth globe');
   assert.match(html, /hidden: !mFront && Math\.hypot/, 'System Moon hides only when eclipsed by Earth\'s disc');
+  // 🌙 No view may show a frozen or tumbling lunar face: every disc call passes
+  // the tidal-lock angle — the mare (near side) aimed at Earth, one turn per orbit.
+  assert.match(html, /if \(moonBehind\) drawUniverseMoonDisc\(ctx, mX, mY, mr, moonRot\)/, 'Earth back-side Moon passes its spin');
+  assert.match(html, /if \(!moonBehind\) drawUniverseMoonDisc\(ctx, mX, mY, mr, moonRot\)/, 'Earth front-side Moon passes its spin');
+  assert.match(html, /if \(!mFront\) drawUniverseMoonDisc\(ctx, mPX, mPY, mPR, mRot\)/, 'System back-side Moon passes its spin');
+  assert.match(html, /drawUniverseMoonDisc\(ctx, moonInfo\.mPX, moonInfo\.mPY, moonInfo\.mPR, moonInfo\.rot\)/, 'System front-side Moon passes its spin');
+  // 🌙 TIDAL LOCK is the law: each view orients the face along the Moon→Earth
+  // line (the mare always faces Earth), and the old 2× pole-to-pole tumble is gone.
+  assert.match(html, /const moonRot = Math\.atan2\(cy - mY, cx - mX\)/, 'Earth view: face angle = true direction to Earth (tidal lock)');
+  assert.match(html, /const mRot = Math\.atan2\(py - mPY, px - mPX\)/, 'System view: face angle = true direction to Earth (tidal lock)');
+  assert.ok(!html.includes('moonAng * 2'), 'the old Earth-view 2× spin (tumble) is gone');
+  assert.ok(!html.includes('mAng * 2'), 'the old System-view 2× spin (tumble) is gone');
+});
+
+test('Universe: Moon surface features visibly rotate (mare + craters move with rot)', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'app.js'), 'utf8');
+  const start = src.indexOf('function drawUniverseMoonDisc(');
+  assert.ok(start > -1, 'disc helper exists');
+  const braceAt = src.indexOf('{', start);
+  let depth = 0, end = -1;
+  for (let i = braceAt; i < src.length; i++) {
+    if (src[i] === '{') depth++;
+    else if (src[i] === '}') { depth--; if (depth === 0) { end = i + 1; break; } }
+  }
+  assert.ok(end > -1, 'function body extracted');
+  const draw = new Function('return ' + src.slice(start, end))();
+  const record = (rot) => {
+    const calls = [];
+    const ctx = new Proxy({}, {
+      get(t, p) {
+        if (typeof p === 'symbol') return undefined;
+        if (p === 'createRadialGradient' || p === 'createLinearGradient') return () => ({ addColorStop() {} });
+        return (...a) => calls.push(p + '(' + a.map((n) => (typeof n === 'number' ? n.toFixed(4) : JSON.stringify(n))).join(',') + ')');
+      },
+      set() { return true; },
+    });
+    draw(ctx, 50, 50, 20, rot);
+    return calls;
+  };
+  const still = record(0);
+  const spun = record(1.3);
+  assert.ok(still.length > 4, 'the disc draws several surface features');
+  assert.equal(still.length, spun.length, 'rotation moves features, it does not add or remove them');
+  assert.notDeepEqual(still, spun, 'rot=1.3 draws a different lunar face than rot=0');
+});
+
+test('Universe: the Moon is TIDALLY LOCKED — it turns exactly once per orbit, mare always facing Earth', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'app.js'), 'utf8');
+  // Pull the REAL lines out of app.js and evaluate them, so this test checks
+  // the shipped maths (not a hand-copied copy of it).
+  const line = (re, what) => {
+    const m = src.match(re);
+    assert.ok(m, 'source line found: ' + what);
+    return m[0].trim();
+  };
+  const earthL = {
+    ang: line(/const moonAng = -0\.9 \+ moonSpin \* \(2 \* Math\.PI \/ 6\);/, 'Earth orbit angle'),
+    moonR: line(/const moonR = R \* 1\.9;/, 'Earth orbit radius'),
+    tilt: line(/const moonTilt = -0\.35;/, 'Earth orbit tilt'),
+    minor: line(/const moonMinor = 0\.42;/, 'Earth orbit flattening'),
+    rot: line(/const moonRot = Math\.atan2\(cy - mY, cx - mX\);/, 'Earth face angle')
+  };
+  const sysL = {
+    ang: line(/const mAng = -0\.9 \+ mSpin \* \(2 \* Math\.PI \/ 2\.2\);/, 'System orbit angle'),
+    mR: line(/const mR = pr \+ 14;/, 'System orbit radius'),
+    mPY: line(/const mPY = py \+ Math\.sin\(mAng\) \* mR \* 0\.55;/, 'System orbit y'),
+    rot: line(/const mRot = Math\.atan2\(py - mPY, px - mPX\);/, 'System face angle')
+  };
+
+  const norm = (a) => Math.atan2(Math.sin(a), Math.cos(a));
+  // The face angle is an atan2 (wrapped to [-PI,PI]) — unwrap it to count the
+  // turns the face really makes.
+  const turns = (list) => {
+    let total = 0;
+    for (let i = 1; i < list.length; i++) total += norm(list[i] - list[i - 1]);
+    return total;
+  };
+
+  // ---- Earth view: one orbit every 6 s ----
+  {
+    const cx = 400, cy = 300, R = 150;
+    const body = [
+      earthL.ang.replace('moonSpin', 'T'), earthL.moonR, earthL.tilt, earthL.minor,
+      'const cosTilt = Math.cos(moonTilt), sinTilt = Math.sin(moonTilt);',
+      'const mOX = Math.cos(moonAng) * moonR;',
+      'const mOY = Math.sin(moonAng) * moonR * moonMinor;',
+      'const mX = cx + mOX * cosTilt - mOY * sinTilt;',
+      'const mY = cy + mOX * sinTilt + mOY * cosTilt;',
+      earthL.rot
+    ].join('\n');
+    const earthAt = (T) => new Function('T', 'cx', 'cy', 'R', body + '\nreturn { moonRot, mX, mY, moonAng };')(T, cx, cy, R);
+
+    // 1) The face must point at Earth at EVERY instant.
+    let worst = 0;
+    const face = [];
+    for (let i = 0; i <= 600; i++) {
+      const s = earthAt((6 * i) / 600);
+      const toEarth = Math.atan2(cy - s.mY, cx - s.mX);
+      worst = Math.max(worst, Math.abs(norm(s.moonRot - toEarth)));
+      face.push(s.moonRot);
+    }
+    assert.ok(worst < 1e-9, 'Earth view: the mare always faces Earth (max deviation ' + worst + ' rad)');
+
+    // 2) Over one full orbit the face must turn exactly ONCE.
+    const t0 = earthAt(0), t1 = earthAt(6);
+    assert.ok(Math.abs((t1.moonAng - t0.moonAng) - 2 * Math.PI) < 1e-9, 'Earth view: the orbit is a full turn in 6 s');
+    assert.ok(Math.abs(turns(face) - 2 * Math.PI) < 1e-6, 'Earth view: the face turns exactly once per orbit (' + turns(face) + ' rad)');
+  }
+
+  // ---- Solar System view: one orbit every 2.2 s ----
+  {
+    const px = 500, py = 400, pr = 10;
+    const body = [
+      sysL.ang.replace('mSpin', 'T'), sysL.mR,
+      'const mPX = px + Math.cos(mAng) * mR;',
+      sysL.mPY, sysL.rot
+    ].join('\n');
+    const sysAt = (T) => new Function('T', 'px', 'py', 'pr', body + '\nreturn { mRot, mPX, mPY, mAng };')(T, px, py, pr);
+
+    let worst = 0;
+    const face = [];
+    for (let i = 0; i <= 600; i++) {
+      const s = sysAt((2.2 * i) / 600);
+      const toEarth = Math.atan2(py - s.mPY, px - s.mPX);
+      worst = Math.max(worst, Math.abs(norm(s.mRot - toEarth)));
+      face.push(s.mRot);
+    }
+    assert.ok(worst < 1e-9, 'System view: the mare always faces Earth (max deviation ' + worst + ' rad)');
+
+    const t0 = sysAt(0), t1 = sysAt(2.2);
+    assert.ok(Math.abs((t1.mAng - t0.mAng) - 2 * Math.PI) < 1e-9, 'System view: the orbit is a full turn in 2.2 s');
+    assert.ok(Math.abs(turns(face) - 2 * Math.PI) < 1e-6, 'System view: the face turns exactly once per orbit (' + turns(face) + ' rad)');
+  }
+
+  // 3) The old 2× pole-to-pole tumble must be gone for good.
+  assert.ok(!src.includes('moonAng * 2'), 'the old Earth-view 2× spin (tumble) is gone');
+  assert.ok(!src.includes('mAng * 2'), 'the old System-view 2× spin (tumble) is gone');
 });
 
 test('Universe: Solar System uses real Keplerian orbits (Sun at focus) and always labels every planet', () => {
@@ -105,3 +276,18 @@ test('Universe: Solar System uses real Keplerian orbits (Sun at focus) and alway
   assert.ok(!html.includes('zoom >= 1.4'), 'planet names are no longer zoom-gated');
   assert.match(html, /universeLabel\(ctx, pl\.name, px, py \+ pr \+ 9/, 'every planet name is drawn unconditionally');
 });
+
+test('Local Group view: galaxy names anchored to each tilted rim; zoom magnifies in place', () => {
+  assert.match(html, /const z = Math\.max\(0\.5, Math\.min\(3, zoom \|\| 1\)\)/, 'deep-view zoom is a real camera (0.5×–3×)');
+  assert.match(html, /const gX = \(fx\) => cx \+ fx \* s \* z;/, 'layout positions magnify with the zoom');
+  assert.match(html, /const gY = \(fy\) => cy \+ fy \* s \* z;/, 'layout heights magnify with the zoom');
+  assert.match(html, /const gR = \(k\) => Math\.max\(8, s \* k \* z\)/, 'galaxy radii follow the zoom');
+  assert.match(html, /const nameAt = \(text, x, y, r, tilt, fill\) => \{/, 'labels use the rim-anchor helper');
+  assert.match(html, /y \+ r \* tilt \+ Math\.max\(10, r \* 0\.22\)/, 'a name sits just below the galaxy\'s tilted visual rim');
+  assert.match(html, /const lx = Math\.max\(half \+ 4, Math\.min\(w - half - 4, x\)\)/, 'labels are clamped inside the canvas');
+  assert.match(html, /\/\/ Pass 2 — …then every name on top, each glued to its own rim\./, 'names paint after the discs, never painted over');
+  assert.ok(!html.includes('cy - s * 0.28 + s * 0.34'), 'the old floating Andromeda label offset is gone');
+  assert.ok(!html.includes('const s = Math.min(w, hh) * 0.5 * zoom'), 'scale no longer swallows the zoom');
+  assert.ok(!html.includes('Math.min(1.4, zoom || 1)'), 'the weak 1.4× zoom clamp is gone');
+});
+

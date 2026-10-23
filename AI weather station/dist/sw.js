@@ -3,7 +3,7 @@
    - notification click opens the app
    - precaches the app shell for offline use
 */
-const CACHE_NAME = 'ai-weather-station-v36'; // v36: 📦 index.html split into index.html (markup) + app.js + style.css so the 783 KB no-cache HTML is gone — repeat loads are cache-first and fast; the 🌤️ emoji weather icons are back (the SVG conversion hid most of them); v35: 🌌 auroras stand at real altitude — the flat ground tint is gone; each view ray is marched through a 90–500 km shell (green 557.7 nm floor, violet/red 630.0 nm tops) so curtains rise above the oval, parallax with the globe and peek over the limb; v34: 👆 map tap actually changes the weather — tap keeps its pin (numeric compare + keepMapPin), cancels stale search debounce, outranks late GPS fixes (gpsIntent guard), GPS abandoned on tap; v33: 📍 iOS location fix — fast low-power fix first (1-2 s not 18 s), safety timers so Safari can never hang, iOS-safe fetch timeouts, instant first weather paint, input stays usable while locating; v32: 🚫 the weather panel is never wiped by a red "Error loading weather data." line again — a failed (auto-)refresh keeps the last good data on screen, manual update failures report under the search box instead; v31: 🌋 lava + ash always visible on volcano cones — floor the report-age intensity (ember) so an EONET event last updated months ago still shows a glowing crater, lava streams/fountain and a smoke plume instead of a bare cone; v30: 🗺️ country borders on the globe — Natural Earth coastlines + shared land borders drawn over the imagery (1:110m always, lazily upgraded to 1:50m past 3× zoom), with a legend chip to switch them off; the coarse outlines are precached for offline
+const CACHE_NAME = 'ai-weather-station-v40'; // v40: 🌙 force-refresh all clients — the Moon SPINS once per orbit (tidal locking), same side always faces Earth. Bump to invalidate every stale service-worker cache serving the old "never rotates" myth; app.js stays network-first.
 const APP_SHELL = [
   '/',
   '/index.html',
@@ -57,6 +57,24 @@ self.addEventListener('fetch', (event) => {
           return response;
         })
         .catch(() => caches.match(request).then((cached) => cached || caches.match('/index.html')))
+    );
+    return;
+  }
+
+  // Script: NETWORK-first — a stale cached app.js is worse than one slow
+  // request (code fixes must land on the very next reload). The cached copy
+  // is kept only as the offline fallback, same idea as the page above.
+  if (url.pathname === '/app.js') {
+    event.respondWith(
+      fetch(request)
+        .then((response) => {
+          if (response && response.ok) {
+            const copy = response.clone();
+            caches.open(CACHE_NAME).then((cache) => cache.put(request, copy));
+          }
+          return response;
+        })
+        .catch(() => caches.match(request).then((cached) => cached || Response.error()))
     );
     return;
   }

@@ -721,17 +721,35 @@
         // coarse GPS/IP fix that may show the wrong place. Only explicit user
         // choices are saved — never an automatic GPS/IP coordinate.
         const LOCALSTORE_LOC_KEY = 'aiwx.manualLocation';
+        // 🧭 True while the user has a place of their own: a city they typed,
+        // a spot they tapped on the map, or a location restored from a previous
+        // session. A BACKGROUND auto-locate (the 10-second "here" refresh) must
+        // never replace it — only an explicit "use my location" may.
+        let manualCityActive = false;
         function saveManualLocation(text) {
             try {
                 const v = String(text || '').trim();
-                if (v) localStorage.setItem(LOCALSTORE_LOC_KEY, v);
+                if (v) {
+                    localStorage.setItem(LOCALSTORE_LOC_KEY, v);
+                    manualCityActive = true;
+                }
             } catch (e) { /* private mode / storage full — non-fatal */ }
         }
         function loadManualLocation() {
-            try { return localStorage.getItem(LOCALSTORE_LOC_KEY) || ''; } catch (e) { return ''; }
+            try {
+                const v = localStorage.getItem(LOCALSTORE_LOC_KEY) || '';
+                if (v) manualCityActive = true;
+                return v;
+            } catch (e) { return ''; }
         }
         function clearManualLocation() {
             try { localStorage.removeItem(LOCALSTORE_LOC_KEY); } catch (e) { /* ignore */ }
+            manualCityActive = false;
+        }
+        // True when an explicit user choice (typed / tapped / remembered) is in
+        // effect and must win over any automatic GPS/IP fix.
+        function hasManualCity() {
+            return manualCityActive || !!loadManualLocation();
         }
         let latestWeatherData = null;
         let selectedDayIndex = 0;
@@ -1403,16 +1421,20 @@
         let universeRaf = 0;
         let universeT = 0;              // scene time (seconds), advances every frame
         let universeLastTs = 0;
-        const universeZoom = { earth: 1, system: 1, galaxy: 1, deep: 1 };
+        const universeZoom = { earth: 1, system: 1, galaxy: 1, deep: 1, north: 1, south: 1 };
         const UNIVERSE_VIEWS = {
             earth: { title: '🌍 Earth — you are here', scale: 'Real coastlines · rotating on its 23.4° tilted axis',
-                text: 'Earth — the third planet from the Sun. Your weather station lives here; every globe label above points back to this dot.' },
+                text: 'Earth — the third planet from the Sun. Your weather station lives here; every globe label above points back to this dot. 🌙 The Moon orbits Earth while spinning on its own axis exactly once per orbit — the same rate it revolves. That is no accident: it is tidal locking. Because the spin and the orbit are locked together, the same side always faces Earth — even when the Moon is on the far side, where that near side still points at Earth, just away from us.' },
             system: { title: '☀️ Solar System — eight worlds in motion', scale: 'Orbital periods to scale, sizes compressed for visibility',
                 text: 'The Sun holds eight planets, all orbiting the same way. Earth runs third — the only known world with liquid-water oceans and life.' },
             galaxy: { title: '🌠 Milky Way — our barred spiral', scale: '≈ 100,000 light-years across',
                 text: 'Our Sun sits in the Orion Arm, ~26,000 light-years from the galactic centre — marked with 📍 YOU.' },
             deep: { title: '🔭 The Local Group — neighbouring galaxies', scale: 'Millions of light-years',
-                text: 'Beyond the Milky Way: Andromeda (2.5M ly), Triangulum (2.7M ly) and the Large Magellanic Cloud (163k ly) — each turning slowly.' }
+                text: 'Beyond the Milky Way: Andromeda (2.5M ly), Triangulum (2.7M ly) and the Large Magellanic Cloud (163k ly) — each turning slowly.' },
+            north: { title: '🐻‍❄️ North Pole — looking down on the Arctic', scale: 'Pole at centre, equator at the rim',
+                text: 'Looking straight down from above the North Pole. Earth spins beneath you; the Moon’s orbit is an inclined ellipse seen pole-on. The mare — the Moon’s near side — keeps facing Earth (tidal lock, one turn per orbit), so from here you can check that the Moon is in the right place in its orbit and the same side still aims at us.' },
+            south: { title: '🐧 South Pole — looking up from the Antarctic', scale: 'Pole at centre, equator at the rim',
+                text: 'Looking straight up from below the South Pole — the mirror of the north view. Earth spins beneath you and the Moon’s orbit appears reversed, exactly as it should from the opposite pole. The tidally locked Moon still turns once per orbit and its near side always faces Earth.' }
         };
         // Real coastline polygons (arrays of [lng, lat]) decoded once from the app's
         // existing TopoJSON so the Universe Earth is genuinely a map of our world.
@@ -1585,7 +1607,7 @@
             const scl = document.getElementById('universe-scale');
             if (cap) cap.textContent = UNIVERSE_VIEWS[name].title + ' — ' + UNIVERSE_VIEWS[name].text;
             if (scl) scl.textContent = UNIVERSE_VIEWS[name].scale;
-            if (name === 'earth') loadUniverseLand(() => drawUniverse());
+            if (name === 'earth' || name === 'north' || name === 'south') loadUniverseLand(() => drawUniverse());
         }
         function drawUniverse() {
             const cv = universeViewEl();
@@ -1608,6 +1630,7 @@
             if (universeView === 'earth') drawUniverseEarth(ctx, w, hh, cx, cy, z);
             else if (universeView === 'system') drawUniverseSystem(ctx, w, hh, cx, cy, z);
             else if (universeView === 'galaxy') drawUniverseGalaxy(ctx, w, hh, cx, cy, z);
+            else if (universeView === 'north' || universeView === 'south') drawUniversePole(ctx, w, hh, cx, cy, z, universeView === 'north');
             else drawUniverseDeep(ctx, w, hh, cx, cy, z);
         }
         function universeLoop(ts) {
@@ -1626,17 +1649,183 @@
         }
         // ---------- 🌍 Earth: real coastlines on a rotating, tilted sphere ----------
         // Shaded Moon disc, shared by the Earth and Solar System views.
-        function drawUniverseMoonDisc(ctx, x, y, r) {
-            ctx.fillStyle = 'rgba(90,100,112,0.9)'; ctx.beginPath(); ctx.arc(x, y, r, 0, 2 * Math.PI); ctx.fill();
-            const mg = ctx.createRadialGradient(x - r * 0.4, y - r * 0.4, 0, x, y, r);
-            mg.addColorStop(0, '#ffffff'); mg.addColorStop(0.45, '#dfe5ec'); mg.addColorStop(1, '#9aa3ae');
-            ctx.fillStyle = mg; ctx.beginPath(); ctx.arc(x, y, r * 0.92, 0, 2 * Math.PI); ctx.fill();
-            ctx.fillStyle = 'rgba(140,150,162,0.8)';
-            ctx.beginPath(); ctx.arc(x - r * 0.25, y + r * 0.1, r * 0.22, 0, 2 * Math.PI); ctx.fill();
-            ctx.beginPath(); ctx.arc(x + r * 0.2, y - r * 0.28, r * 0.15, 0, 2 * Math.PI); ctx.fill();
-            ctx.strokeStyle = 'rgba(230,240,250,0.9)'; ctx.lineWidth = 1;
-            ctx.beginPath(); ctx.arc(x, y, r, 0, 2 * Math.PI); ctx.stroke();
+        // `rot` orients the lunar face; both callers set it to the TRUE
+        // Moon→Earth direction — tidal locking, exactly like the real Moon:
+        // the same side always faces Earth, one turn per orbit.
+        function drawUniverseMoonDisc(ctx, x, y, r, rot) {
+            const rr = (rot || 0);
+            const cosR = Math.cos(rr);
+            const sinR = Math.sin(rr);
+            // Base sphere — the Moon is dark gray (albedo ~0.12), not bright white
+            ctx.fillStyle = '#6e7a85'; ctx.beginPath(); ctx.arc(x, y, r, 0, 2 * Math.PI); ctx.fill();
+            // Stronger spherical shading — pronounced limb darkening for a realistic 3D globe
+            const mg = ctx.createRadialGradient(x - r * 0.12, y - r * 0.12, 0, x, y, r * 1.2);
+            mg.addColorStop(0, '#e8edf0');   // bright centre
+            mg.addColorStop(0.30, '#b9c4cc'); // mid
+            mg.addColorStop(0.65, '#7c8892'); // darker
+            mg.addColorStop(1, '#3a444a');    // dark limb
+            ctx.fillStyle = mg; ctx.beginPath(); ctx.arc(x, y, r * 0.985, 0, 2 * Math.PI); ctx.fill();
+            // Maria — dark basaltic plains in realistic near-side positions.
+            // All rotate together with `rr` so the pattern always faces Earth (tidal locking).
+            ctx.fillStyle = '#3d4a54';
+            ctx.beginPath(); ctx.ellipse(x - cosR * r * 0.40, y - sinR * r * 0.15, r * 0.28, r * 0.22, rr, 0, 2 * Math.PI); ctx.fill(); // Oceanus Procellarum (vast, western)
+            ctx.beginPath(); ctx.ellipse(x - cosR * r * 0.28, y - sinR * r * 0.38, r * 0.24, r * 0.19, rr + 0.25, 0, 2 * Math.PI); ctx.fill(); // Mare Imbrium (large, northwest)
+            ctx.beginPath(); ctx.arc(x - cosR * r * 0.15, y - sinR * r * 0.26, r * 0.16, 0, 2 * Math.PI); ctx.fill(); // Mare Serenitatis (northeast)
+            ctx.beginPath(); ctx.arc(x - cosR * r * 0.20, y - sinR * r * 0.14, r * 0.14, 0, 2 * Math.PI); ctx.fill(); // Mare Tranquillitatis (east of centre)
+            ctx.beginPath(); ctx.ellipse(x + cosR * r * 0.52, y - sinR * r * 0.08, r * 0.14, r * 0.10, rr, 0, 2 * Math.PI); ctx.fill(); // Mare Crisium (eastern, isolated)
+            ctx.beginPath(); ctx.arc(x + cosR * r * 0.42, y - sinR * r * 0.20, r * 0.13, 0, 2 * Math.PI); ctx.fill(); // Mare Fecunditatis (southeast)
+            ctx.beginPath(); ctx.arc(x + cosR * r * 0.38, y - sinR * r * 0.30, r * 0.11, 0, 2 * Math.PI); ctx.fill(); // Mare Nectaris (south of Fecunditatis)
+            ctx.beginPath(); ctx.arc(x - cosR * r * 0.10, y - sinR * r * 0.42, r * 0.17, 0, 2 * Math.PI); ctx.fill(); // Mare Nubium (south)
+            ctx.beginPath(); ctx.arc(x - cosR * r * 0.30, y - sinR * r * 0.40, r * 0.14, 0, 2 * Math.PI); ctx.fill(); // Mare Humorum (southwest)
+            ctx.beginPath(); ctx.ellipse(x - cosR * r * 0.05, y - sinR * r * 0.50, r * 0.22, r * 0.07, rr, 0, 2 * Math.PI); ctx.fill(); // Mare Frigoris (north, long strip)
+            ctx.beginPath(); ctx.arc(x + cosR * r * 0.48, y - sinR * r * 0.42, r * 0.09, 0, 2 * Math.PI); ctx.fill(); // Mare Spumans (southeast edge)
+            // Highland patches — lighter gray areas (bright heavily-cratered highlands)
+            ctx.fillStyle = '#9aa8b2';
+            ctx.beginPath(); ctx.arc(x + cosR * r * 0.32, y - sinR * r * 0.32, r * 0.19, 0, 2 * Math.PI); ctx.fill();
+            ctx.beginPath(); ctx.arc(x - cosR * r * 0.05, y - sinR * r * 0.52, r * 0.16, 0, 2 * Math.PI); ctx.fill();
+            ctx.beginPath(); ctx.arc(x + cosR * r * 0.55, y - sinR * r * 0.30, r * 0.15, 0, 2 * Math.PI); ctx.fill();
+            ctx.beginPath(); ctx.arc(x - cosR * r * 0.45, y - sinR * r * 0.10, r * 0.14, 0, 2 * Math.PI); ctx.fill();
+            // Craters — subtle depressions with lighter rims and darker floors for depth
+            const craters = [
+                [0.50, 0.05, 0.07], [0.45, -0.30, 0.06], [-0.40, 0.35, 0.08], [-0.55, -0.10, 0.06],
+                [0.10, 0.50, 0.05], [-0.15, -0.50, 0.06], [0.60, 0.25, 0.05], [-0.65, -0.25, 0.05],
+                [0.25, -0.45, 0.06], [-0.30, 0.45, 0.05], [0.35, 0.10, 0.04], [-0.45, -0.35, 0.04],
+                [0.55, -0.45, 0.05], [-0.50, 0.40, 0.05], [0.20, -0.20, 0.03], [-0.20, 0.20, 0.03]
+            ];
+            craters.forEach(([dx, dy, sz]) => {
+                const cx = x + cosR * r * dx;
+                const cy = y - sinR * r * dy;
+                const rimR = r * sz * 1.15;
+                // Crater rim (lighter, raised)
+                ctx.fillStyle = '#8c99a2';
+                ctx.beginPath(); ctx.arc(cx, cy, rimR, 0, 2 * Math.PI); ctx.fill();
+                // Crater floor (darker, depressed)
+                ctx.fillStyle = '#2e3a42';
+                ctx.beginPath(); ctx.arc(cx, cy, r * sz, 0, 2 * Math.PI); ctx.fill();
+            });
+            // Subtle surface texture — fine speckle for a realistic regolith look
+            ctx.fillStyle = 'rgba(60,70,80,0.15)';
+            for (let t = 0; t < 40; t++) {
+                const tx = x + (Math.sin(t * 137) * 0.5 + Math.cos(t * 73) * 0.5) * r * 0.8;
+                const ty = y + (Math.cos(t * 97) * 0.5 + Math.sin(t * 151) * 0.5) * r * 0.8;
+                if (Math.hypot(tx - x, ty - y) < r * 0.85) {
+                    ctx.beginPath(); ctx.arc(tx, ty, r * 0.015, 0, 2 * Math.PI); ctx.fill();
+                }
+            }
+            // Thin limb line
+            ctx.strokeStyle = 'rgba(150,160,170,0.75)'; ctx.lineWidth = 1;
+            ctx.beginPath(); ctx.arc(x, y, r * 0.99, 0, 2 * Math.PI); ctx.stroke();
         }
+        // Project a (lat, lng) surface point onto a polar view looking straight
+        // down the rotation axis: the pole sits at screen centre, the equator at
+        // the rim, and z > 0 is the hemisphere facing the viewer (the Arctic from
+        // the North Pole, the Antarctic from the South Pole). lon0 spins the disc
+        // so you watch Earth rotate under the pole.
+        function universePoleProject(lat, lng, lon0, north) {
+            const phi = lat * U_RAD, lam = (lng - lon0) * U_RAD;
+            const cosPhi = Math.cos(phi), sinPhi = Math.sin(phi);
+            const r = cosPhi;                                 // 0 at the pole, 1 at the equator
+            const x = r * Math.sin(lam);
+            const y = north ? -r * Math.cos(lam) : r * Math.cos(lam);
+            const z = north ? sinPhi : -sinPhi;               // depth toward the viewed pole
+            return { x, y, z };
+        }
+
+        // ---------- 🐻‍❄️ North Pole / 🐧 South Pole: Earth seen straight down its axis ----------
+        // Look down from above the North Pole or up from below the South Pole.
+        // Coastlines rotate around the pole (Earth's spin). The Moon's orbit is an
+        // inclined ellipse seen pole-on; the mare keeps facing Earth (tidal lock,
+        // one turn per orbit), so you can check the Moon's position from either pole.
+        function drawUniversePole(ctx, w, hh, cx, cy, zoom, north) {
+            const R = Math.min(w, hh) * 0.30 * zoom;
+            const lon0 = -universeT * 12;          // Earth spins under the pole
+            const moonMinor = 0.42, moonTilt = -0.35;  // same orbital elements as the Earth view
+            const moonSpin = universeMotionOK ? universeT : 0;
+            const mAng = -0.9 + moonSpin * (2 * Math.PI / 6);  // one ~6 s orbit on screen
+            const moonR = R * 1.9;
+            const mr = Math.max(4, R * 0.13);
+            // The Moon's orbit is inclined to Earth's equator. Projected to a pole view it
+            // becomes an ellipse. Viewed from the North Pole the ellipse leans one way;
+            // viewed from the South Pole (looking from underneath) the same physical orbit
+            // leans the opposite way, so the orbit line is visibly different between poles.
+            const nodeN = 1.0;                 // line of nodes on screen from North Pole
+            const nodeS = nodeN + 0.9;         // same line appears rotated from South Pole
+            const incl = moonTilt;             // orbital inclination
+            const node = north ? nodeN : nodeS;
+            const cn = Math.cos(node), sn = Math.sin(node);
+            const orbitPoint = (a) => {
+                const ox = Math.cos(a) * moonR;
+                const oy = Math.sin(a) * moonR * moonMinor;
+                const yTilted = oy * Math.cos(incl);
+                const z = oy * Math.sin(incl);          // depth toward/away from viewed pole
+                const rx = ox * cn - yTilted * sn;
+                const ry = ox * sn + yTilted * cn;
+                const sy = north ? -ry : ry;            // north: y up, south: y down
+                return { x: cx + rx, y: cy + sy, z: north ? z : -z };
+            };
+            const m = orbitPoint(mAng);
+            const mX = m.x, mY = m.y, mZ = m.z;
+            // Tidal lock: the Moon's near side (the mare) always faces Earth, so the
+            // face orientation is the screen angle from the Moon to Earth's centre.
+            // Because the South Pole view looks from the opposite side of Earth, the
+            // whole scene — including the Moon — is vertically mirrored, so the
+            // Moon's apparent rotation is mirrored too: it is NOT the same rotation
+            // from the North and South Poles.
+            const moonRot = Math.atan2(cy - mY, cx - mX);      // mare aims at Earth — tidal lock
+            // The Moon's orbit ring as seen from the pole — an inclined ellipse whose
+            // apparent tilt reverses between the North and South Pole views.
+            ctx.save();
+            ctx.strokeStyle = 'rgba(180,205,230,0.45)'; ctx.lineWidth = 1;
+            ctx.beginPath();
+            const steps = 64;
+            for (let s = 0; s <= steps; s += 1) {
+                const p = orbitPoint((s / steps) * 2 * Math.PI);
+                (s === 0 ? ctx.moveTo : ctx.lineTo).call(ctx, p.x, p.y);
+            }
+            ctx.closePath(); ctx.stroke();
+            ctx.restore();
+            // Earth disc — the polar hemisphere we're looking down / up at.
+            const og = ctx.createRadialGradient(cx - R * 0.15, cy - R * 0.15, R * 0.1, cx, cy, R);
+            og.addColorStop(0, '#5fb0ff'); og.addColorStop(0.5, '#1f6fd0'); og.addColorStop(1, '#08306e');
+            ctx.beginPath(); ctx.arc(cx, cy, R, 0, 2 * Math.PI); ctx.fillStyle = og;
+            ctx.fill();
+            ctx.save();
+            ctx.beginPath(); ctx.arc(cx, cy, R, 0, 2 * Math.PI); ctx.clip();
+            if (universeLand && universeLand.length) {
+                for (const ring of universeLand) {
+                    ctx.beginPath();
+                    let started = false;
+                    for (let i = 0; i < ring.length; i += 1) {
+                        const p = universePoleProject(ring[i][1], ring[i][0], lon0, north);
+                        if (p.z <= 0) { started = false; continue; } // far hemisphere: hidden
+                        const sx = cx + p.x * R, sy = cy + p.y * R;
+                        if (!started) { ctx.moveTo(sx, sy); started = true; } else ctx.lineTo(sx, sy);
+                    }
+                    ctx.closePath();
+                    ctx.fillStyle = 'rgba(96, 168, 96, 0.92)';
+                    ctx.fill();
+                    ctx.strokeStyle = 'rgba(150, 214, 150, 0.5)'; ctx.lineWidth = 0.6; ctx.stroke();
+                }
+            } else {
+                universeLabel(ctx, north ? 'Loading North Pole…' : 'Loading South Pole…', cx, cy, 13, '#cfe3ff');
+            }
+            ctx.restore();
+            // Limb + pole marker at the centre.
+            ctx.strokeStyle = 'rgba(255,255,255,0.25)'; ctx.lineWidth = 1;
+            ctx.beginPath(); ctx.arc(cx, cy, R, 0, 2 * Math.PI); ctx.stroke();
+            ctx.fillStyle = '#ffd15c'; ctx.beginPath(); ctx.arc(cx, cy, Math.max(3, R * 0.012), 0, 2 * Math.PI); ctx.fill();
+            // The Moon — well outside Earth's disc here, drawn at its orbital place.
+            ctx.globalAlpha = mZ > 0 ? 1 : 0.35;
+            drawUniverseMoonDisc(ctx, mX, mY, mr, moonRot);
+            ctx.globalAlpha = 1;
+            universeLabel(ctx, mZ > 0 ? '🌙 Moon · 27.3 d' : '🌙 Moon · far side of the equator',
+                mX, mY - mr - 11, Math.max(9, R * 0.06), mZ > 0 ? '#eaf2fb' : '#6e7a85');
+            universeLabel(ctx, north ? '🌎 North Pole · looking down on the Arctic' : '🌍 South Pole · looking up from the Antarctic',
+                cx, cy - R - 22, Math.max(10, R * 0.08), '#ffe3a3');
+            universeLabel(ctx, 'Earth · 12,742 km · tidally locked Moon',
+                cx, cy + R + 22, Math.max(9, R * 0.075), '#9db8d8');
+        }
+
         function drawUniverseEarth(ctx, w, hh, cx, cy, zoom) {
             const R = Math.min(w, hh) * 0.30 * zoom;
             const lon0 = -universeT * 12;          // spins west→east, ~12°/s (visible motion)
@@ -1647,23 +1836,39 @@
             // Frozen under prefers-reduced-motion via universeMotionOK.
             const moonSpin = universeMotionOK ? universeT : 0;
             const moonAng = -0.9 + moonSpin * (2 * Math.PI / 6);
-            const moonR = R * 1.45;
+            const moonR = R * 1.9;
             const moonTilt = -0.35;
+            // Flattened orbit (minor axis 0.42 × moonR): the far arc's closest
+            // approach to Earth's centre is ry ≈ 0.84·R, i.e. INSIDE the disc —
+            // so the Moon genuinely slides behind the globe (fully hidden for a
+            // moment) and the near arc dips in front of it. The paint order
+            // below does the occlusion: far half + back Moon BEFORE the globe,
+            // near half + front Moon AFTER it.
+            const moonMinor = 0.42;
             const cosTilt = Math.cos(moonTilt), sinTilt = Math.sin(moonTilt);
-            // Point on the rotated ellipse: rotate (cos*moonR, sin*moonR*0.52).
+            // Point on the tilted orbit ellipse: rotate (cos*moonR, sin*moonR*moonMinor).
             const mOX = Math.cos(moonAng) * moonR;
-            const mOY = Math.sin(moonAng) * moonR * 0.52;
+            const mOY = Math.sin(moonAng) * moonR * moonMinor;
             const mX = cx + mOX * cosTilt - mOY * sinTilt;
             const mY = cy + mOX * sinTilt + mOY * cosTilt;
             const moonBehind = mY < cy;           // above Earth's centre = far side of the orbit
             const mr = Math.max(4, R * 0.13);
+            // 🌙 TRUE tidal locking (the real Moon, 27.3-day period): the near
+            // side — the mare, drawn at face angle 0 — points along the
+            // Moon→Earth line at every instant, so ONE lunar side always faces
+            // Earth. The face still turns exactly once per orbit, which a fixed
+            // camera sees as a slow steady 360° sweep — never a pole-to-pole
+            // tumble. atan2 of the true screen positions stays exact through
+            // the tilted, squashed orbit ellipse and freezes with it.
+            const moonRot = Math.atan2(cy - mY, cx - mX);
             // Parametric angle where the tilted orbit crosses Earth's centre line:
             // vertical offset = A*cos(t) + B*sin(t); negative half is behind the globe.
-            const mStar = Math.atan2(-moonR * sinTilt, moonR * 0.52 * cosTilt);
+            const mStar = Math.atan2(-moonR * sinTilt, moonR * moonMinor * cosTilt);
             // FAR half of the orbit ring first…
             ctx.strokeStyle = 'rgba(180,205,230,0.4)'; ctx.lineWidth = 1;
-            ctx.beginPath(); ctx.ellipse(cx, cy, moonR, moonR * 0.52, moonTilt, mStar + Math.PI, mStar + 2 * Math.PI); ctx.stroke();
-            if (moonBehind) drawUniverseMoonDisc(ctx, mX, mY, mr);  // …and the Moon on the back side
+            ctx.beginPath(); ctx.ellipse(cx, cy, moonR, moonR * moonMinor, moonTilt, mStar + Math.PI, mStar + 2 * Math.PI); ctx.stroke();
+            // …and the Moon on the back side — tidally locked, mare aimed at Earth.
+            if (moonBehind) drawUniverseMoonDisc(ctx, mX, mY, mr, moonRot);
             const litX = cx - R * 0.45, litY = cy - R * 0.45;
             const og = ctx.createRadialGradient(litX, litY, R * 0.1, cx, cy, R);
             og.addColorStop(0, '#5fb0ff'); og.addColorStop(0.5, '#1f6fd0'); og.addColorStop(1, '#08306e');
@@ -1698,8 +1903,9 @@
             // 🌙 NEAR half of the lunar orbit, drawn AFTER Earth — the ring visibly
             // passes in front of the globe (it already vanished behind it above).
             ctx.strokeStyle = 'rgba(210,228,248,0.65)'; ctx.lineWidth = 1.2;
-            ctx.beginPath(); ctx.ellipse(cx, cy, moonR, moonR * 0.52, moonTilt, mStar, mStar + Math.PI); ctx.stroke();
-            if (!moonBehind) drawUniverseMoonDisc(ctx, mX, mY, mr);   // Moon IN FRONT of Earth
+            ctx.beginPath(); ctx.ellipse(cx, cy, moonR, moonR * moonMinor, moonTilt, mStar, mStar + Math.PI); ctx.stroke();
+            // Moon IN FRONT of Earth — same tidally locked face as the back side.
+            if (!moonBehind) drawUniverseMoonDisc(ctx, mX, mY, mr, moonRot);
             // Label only while the Moon is actually visible (not hidden by the globe).
             const moonVisible = !moonBehind || Math.hypot(mX - cx, mY - cy) > R + mr;
             if (moonVisible) universeLabel(ctx, '🌙 Moon · 27.3 d', mX, mY - mr - 11, Math.max(10, R * 0.065), moonBehind ? '#9db1c6' : '#eaf2fb');
@@ -1795,16 +2001,22 @@
                 if (pl.you) {
                     const mSpin = universeMotionOK ? universeT : 0;
                     const mAng = -0.9 + mSpin * (2 * Math.PI / 2.2);
-                    const mR = pr + 12;
+                    // Keep the lunar ring well clear of Earth's disc so the Moon
+                    // orbits AROUND it instead of crossing through the globe.
+                    const mR = pr + 14;
                     const mPX = px + Math.cos(mAng) * mR;
-                    const mPY = py + Math.sin(mAng) * mR * 0.38;
+                    const mPY = py + Math.sin(mAng) * mR * 0.55;
                     const mPR = Math.max(2, pr * 0.42);
                     const mFront = mPY >= py;             // below Earth's centre = near side
                     // FAR half of the lunar ring (sin < 0 ⇒ above centre)…
                     ctx.strokeStyle = 'rgba(200,220,242,0.65)'; ctx.lineWidth = 1;
-                    ctx.beginPath(); ctx.ellipse(px, py, mR, mR * 0.38, 0, Math.PI, 2 * Math.PI); ctx.stroke();
-                    if (!mFront) drawUniverseMoonDisc(ctx, mPX, mPY, mPR);   // …Moon on the back side
+                    ctx.beginPath(); ctx.ellipse(px, py, mR, mR * 0.55, 0, Math.PI, 2 * Math.PI); ctx.stroke();
+                    // TRUE tidal lock, same rule as the Earth view: the mare (the
+                    // Moon's near side) always aims at Earth — one turn per orbit.
+                    const mRot = Math.atan2(py - mPY, px - mPX);
+                    if (!mFront) drawUniverseMoonDisc(ctx, mPX, mPY, mPR, mRot);   // …Moon on the back side, rotating
                     moonInfo = { mPX: mPX, mPY: mPY, mPR: mPR, mR: mR, front: mFront,
+                                 rot: mRot,
                                  hidden: !mFront && Math.hypot(mPX - px, mPY - py) <= pr + mPR };
                 }
                 if (pl.ring) {   // Saturn's ring
@@ -1822,9 +2034,9 @@
                         // NEAR half of the lunar ring, over the globe (the far half was
                         // already painted behind it), then the Moon crossing IN FRONT.
                         ctx.strokeStyle = 'rgba(210,228,248,0.75)'; ctx.lineWidth = 1.1;
-                        ctx.beginPath(); ctx.ellipse(px, py, moonInfo.mR, moonInfo.mR * 0.38, 0, 0, Math.PI); ctx.stroke();
+                        ctx.beginPath(); ctx.ellipse(px, py, moonInfo.mR, moonInfo.mR * 0.55, 0, 0, Math.PI); ctx.stroke();
                         if (moonInfo.front) {
-                            drawUniverseMoonDisc(ctx, moonInfo.mPX, moonInfo.mPY, moonInfo.mPR);
+                            drawUniverseMoonDisc(ctx, moonInfo.mPX, moonInfo.mPY, moonInfo.mPR, moonInfo.rot);
                             universeLabel(ctx, 'Moon', moonInfo.mPX, moonInfo.mPY - moonInfo.mPR - 8, Math.max(8, pr * 0.75), '#dfe9f5');
                         } else if (!moonInfo.hidden) {
                             // Back side but clear of Earth's disc — still visible, dimmer.
@@ -1841,22 +2053,49 @@
 
 
         // ---------- 🌠 Milky Way: rotating barred spiral, Sun on the Orion Arm ----------
-        // Pre-computed spiral star field; the whole disc turns slowly (differential
-        // rotation: inner stars faster). The Sun sits ~26,000 ly from the centre.
+        // A real spiral galaxy is a DENSITY WAVE: stars orbit at wildly different
+        // speeds, but the arms are a standing PATTERN that turns rigidly (Ω_p) and
+        // never winds up. So the disc rotates as one shape — and the shape is a
+        // LOGARITHMIC spiral, θ(r) = θ₀ − ln(r/r₀)/tan(pitch): the self-similar
+        // curve with a CONSTANT pitch angle that stays a perfect spiral at every
+        // moment of the turn. Measured Milky Way pitch angles span ~12–25° per
+        // arm (Choi et al. 2008 fits); 20° with arms ignited at the bar ends
+        // gives each arm a ~¾-turn bar-to-rim sweep — the classic legible barred
+        // spiral. (The oft-quoted 12.5° average would wind >1½ turns across the
+        // full disc and close into concentric rings instead of readable arms.) The
+        // winding runs AGAINST the turn — arm tips lag the rotation, so the
+        // arms TRAIL behind the spin exactly like every real spiral galaxy.
+        // Differential speeds and per-star angle wobbles only shred the arms, so
+        // brightness twinkle is the ONLY per-star animation. The Sun sits exactly
+        // ON the arm curve at 26,000 ly and rides the pattern, never drifting off.
         let uGalaxyStars = null;
+        const MW_ARMS = 4;                        // two major + two minor arms
+        const MW_PITCH = 20 * Math.PI / 180;      // arm pitch: ~¾-turn sweep, never rings
+        const MW_R0 = 0.18;                       // arms ignite at the bar ends (~0.2 R)
+        function mwArmAngle(rad, arm) {
+            // Normalized radius → angle of arm `arm` on the logarithmic spiral.
+            // NEGATIVE winding term: the disc turns toward +θ (see `a = st.ang
+            // + rot` below) while θ falls as r grows, so every arm tip lags its
+            // root — the arms trail the turn instead of screwing into it.
+            const r = Math.max(MW_R0, rad);
+            return arm * (2 * Math.PI / MW_ARMS) - Math.log(r / MW_R0) / Math.tan(MW_PITCH);
+        }
         function buildUniverseGalaxy() {
             const out = [];
             const rnd = (s) => { let x = Math.sin(s) * 43758.5453; return x - Math.floor(x); };
-            for (let arm = 0; arm < 4; arm += 1) {
+            for (let arm = 0; arm < MW_ARMS; arm += 1) {
                 for (let s = 0; s < 260; s += 1) {
                     const t = s / 260;
-                    const baseAng = arm * (Math.PI / 2) + t * Math.PI * 2.4;   // 2.4-turn spiral
-                    const spread = (rnd(s * 7.1 + arm * 31) - 0.5) * 0.5 * (0.3 + t);
-                    const rad = 0.10 + 0.90 * t + (rnd(s * 3.3 + arm) - 0.5) * 0.06;
-                    out.push({ ang: baseAng + spread, rad: rad, hue: rnd(s + arm * 9), tw: rnd(s * 1.7 + arm) });
+                    const rad = MW_R0 + (1 - MW_R0) * t;
+                    // Constant arm WIDTH: angular scatter scaled by 1/r (two summed
+                    // uniforms ≈ gaussian), so the arm keeps the same physical
+                    // thickness from the bar all the way to the rim.
+                    const scat = (rnd(s * 7.1 + arm * 31) - 0.5) + (rnd(s * 13.7 + arm * 7) - 0.5);
+                    const ang = mwArmAngle(rad, arm) + scat * 0.09 / Math.max(0.35, rad);
+                    out.push({ ang: ang, rad: rad, hue: rnd(s + arm * 9), tw: rnd(s * 1.7 + arm) });
                 }
             }
-            for (let b = 0; b < 220; b += 1) {   // central bulge / bar
+            for (let b = 0; b < 220; b += 1) {   // central bulge / bar (pattern-locked)
                 const a = rnd(b * 2.1) * Math.PI * 2;
                 const r = Math.pow(rnd(b * 5.3), 1.7) * 0.22;
                 out.push({ ang: a, rad: r, hue: 0.12, tw: rnd(b * 3.1), bar: true });
@@ -1866,9 +2105,10 @@
         function drawUniverseGalaxy(ctx, w, hh, cx, cy, zoom) {
             if (!uGalaxyStars) uGalaxyStars = buildUniverseGalaxy();
             const R = Math.min(w, hh) * 0.44 * zoom;
-            // Rigid disc turn + differential shear TOGETHER: the whole pattern
-            // rotates (rot) while inner stars lap the outer ones (shear). The
-            // Sun rides rot exactly so it never leaves the Orion Arm.
+            // Density-wave rotation: ONE rigid turn (rot) carries the whole
+            // pattern — arms, bar and Sun locked together — which is exactly how
+            // spiral structure turns without winding up. The only per-star
+            // animation is brightness twinkle, so the arms never smear.
             // Respects prefers-reduced-motion (frozen sky when reduced motion).
             const spin = universeMotionOK ? universeT : 0;
             const rot = spin * 0.05;                                // slow, steady turn (~2 min/rev)
@@ -1878,13 +2118,10 @@
             ctx.fillStyle = core; ctx.beginPath(); ctx.arc(cx, cy, R * 0.28, 0, 2 * Math.PI); ctx.fill();
             for (let i = 0; i < uGalaxyStars.length; i += 1) {
                 const st = uGalaxyStars[i];
-                // Cohesive drift: one rigid turn (rot) carries the whole pattern, plus a
-                // tiny BOUNDED sway per star (a sine wobble, never accumulating) so the
-                // arms shimmer but can never wind up or drift apart over time.
-                const sway = st.bar
-                    ? Math.sin(spin * 0.4 + st.tw * 6.283) * 0.03
-                    : Math.sin(spin * 0.35 + st.tw * 6.283) * 0.05 * (1.15 - st.rad * 0.5);
-                const a = st.ang + rot + sway;
+                // The star's angle is FIXED on the logarithmic spiral — only its
+                // brightness twinkles below. The pattern turns rigidly (rot), so
+                // the arms keep their exact shape forever: no winding, no smear.
+                const a = st.ang + rot;
                 const rr = R * st.rad;
                 const x = cx + Math.cos(a) * rr;
                 const y = cy + Math.sin(a) * rr * 0.42;                  // face-on-ish tilt
@@ -1896,11 +2133,13 @@
                 ctx.beginPath(); ctx.arc(x, y, size, 0, 2 * Math.PI); ctx.fill();
             }
             ctx.globalAlpha = 1;
-            // Sun: ~26,000 ly out, on the Orion Arm (between Perseus and Sagittarius).
-            // Rides `rot` EXACTLY like the arm pattern, so it stays on its arm
-            // instead of drifting through the disc.
-            const sunAng = 2.35 + rot;
-            const sunRr = R * 0.55;
+            // Sun: 26,000 ly out (r = 0.52 of the 50,000-ly half-width). It sits
+            // ON the logarithmic arm curve — computed from the very same equation
+            // as the arms, hugging the Orion Spur just off the Sagittarius arm —
+            // and rides the pattern turn `rot` exactly, so it can never leave it.
+            const sunRad = 0.52;
+            const sunAng = mwArmAngle(sunRad, 1) + 0.12 + rot;
+            const sunRr = R * sunRad;
             const sx = cx + Math.cos(sunAng) * sunRr, sy = cy + Math.sin(sunAng) * sunRr * 0.42;
             ctx.fillStyle = '#fff2c0'; ctx.beginPath(); ctx.arc(sx, sy, 2.4, 0, 2 * Math.PI); ctx.fill();
             ctx.strokeStyle = 'rgba(255,227,163,0.9)'; ctx.lineWidth = 1.2;
@@ -1910,20 +2149,31 @@
         }
 
         // ---------- 🔭 The Local Group: Andromeda, Triangulum, LMC — each turning ----------
-        // Correct way: each galaxy spins around its OWN centre (arm angle +
-        // spin), all in the same counter-clockwise sense as the Milky Way.
-        // Frozen when prefers-reduced-motion is set.
+        // Correct way: each galaxy spins RIGIDLY around its OWN centre, and each is
+        // a LOGARITHMIC spiral whose constant pitch angle is derived from the
+        // visible `turns` — so the arm shape it was drawn with is the shape it
+        // keeps as it turns (density-wave rotation, same physics as the Milky Way).
+        // Winding runs against each spin, so every galaxy's arms TRAIL its turn.
+        // Frozen when prefers-reduced-motion.
         function drawUniverseGalaxyAt(ctx, x, y, R, seed, turns, tilt) {
             const rnd = (s) => { let v = Math.sin(s * 12.9898 + seed) * 43758.5453; return v - Math.floor(v); };
             const spin = universeMotionOK ? universeT : 0;
+            // Pitch of the log spiral winding exactly `turns` times from r₀ to the
+            // rim: tan(p) = ln(1/r₀) / (turns · 2π). Constant pitch = real arms;
+            // the MINUS sign below makes each galaxy's arms trail its spin.
+            const gR0 = 0.12;
+            const gPitch = Math.atan(Math.log(1 / gR0) / (turns * 2 * Math.PI));
             const core = ctx.createRadialGradient(x, y, 0, x, y, R * 0.35);
             core.addColorStop(0, 'rgba(255,248,225,0.95)'); core.addColorStop(1, 'rgba(255,200,140,0)');
             ctx.fillStyle = core; ctx.beginPath(); ctx.arc(x, y, R * 0.35, 0, 2 * Math.PI); ctx.fill();
             for (let arm = 0; arm < 2; arm += 1) {
                 for (let s = 0; s < 90; s += 1) {
                     const t = s / 90;
-                    const ang = spin * 0.06 + arm * Math.PI + t * Math.PI * turns + (rnd(s * 3 + arm) - 0.5) * 0.4;
-                    const rr = R * (0.12 + 0.88 * t + (rnd(s * 7 + arm) - 0.5) * 0.05);
+                    const rr = R * (gR0 + (1 - gR0) * t + (rnd(s * 7 + arm) - 0.5) * 0.04);
+                    // Constant arm width: angular scatter scaled by 1/r, so the
+                    // arms never turn to radial fuzz near the core as they spin.
+                    const scat = (rnd(s * 3 + arm) - 0.5) + (rnd(s * 11 + arm * 5) - 0.5);
+                    const ang = spin * 0.06 + arm * Math.PI - Math.log(Math.max(gR0, rr / R) / gR0) / Math.tan(gPitch) + scat * 0.10 / Math.max(0.3, rr / R);
                     const px = x + Math.cos(ang) * rr;
                     const py = y + Math.sin(ang) * rr * tilt;
                     ctx.globalAlpha = (0.2 + 0.7 * (1 - t * 0.5)) * (universeMotionOK ? (0.6 + 0.4 * Math.sin(spin * 2 + s)) : 1);
@@ -1934,17 +2184,49 @@
             ctx.globalAlpha = 1;
         }
         function drawUniverseDeep(ctx, w, hh, cx, cy, zoom) {
-            const s = Math.min(w, hh) * 0.5 * zoom;
-            drawUniverseGalaxyAt(ctx, cx - s * 0.42, cy - s * 0.28, s * 0.30, 3.7, 2.6, 0.5);  // Andromeda (M31)
-            universeLabel(ctx, 'Andromeda · 2.5M ly', cx - s * 0.42, cy - s * 0.28 + s * 0.34, Math.max(9, s * 0.05), '#bcd4f0');
-            drawUniverseGalaxyAt(ctx, cx + s * 0.46, cy + s * 0.10, s * 0.20, 8.1, 2.2, 0.6);   // Triangulum (M33)
-            universeLabel(ctx, 'Triangulum · 2.7M ly', cx + s * 0.46, cy + s * 0.10 + s * 0.24, Math.max(9, s * 0.045), '#bcd4f0');
-            drawUniverseGalaxyAt(ctx, cx + s * 0.05, cy + s * 0.52, s * 0.13, 5.5, 1.8, 0.7);  // Large Magellanic Cloud
-            universeLabel(ctx, 'LMC · 163k ly', cx + s * 0.05, cy + s * 0.52 + s * 0.17, Math.max(9, s * 0.045), '#bcd4f0');
-            // Milky Way as a small edge-on disc — our home among them
-            drawUniverseGalaxyAt(ctx, cx - s * 0.16, cy + s * 0.18, s * 0.10, 1.3, 2.4, 0.35);
-            universeLabel(ctx, 'Milky Way · 📍 YOU', cx - s * 0.16, cy + s * 0.18 + s * 0.14, Math.max(9, s * 0.045), '#ffe3a3');
-            universeLabel(ctx, 'The Local Group · millions of light-years', cx, cy + s * 0.86, Math.max(9, s * 0.05), '#9db8d8');
+            // Zoom is a real camera: layout positions AND radii magnify together
+            // around the canvas centre, so + / − visibly zoom (0.5×–3×). Labels
+            // are drawn in a second pass — on top, never painted over — each
+            // anchored just below its own galaxy's tilted rim and clamped
+            // inside the canvas so names stay glued to their discs.
+            const z = Math.max(0.5, Math.min(3, zoom || 1));
+            const s = Math.min(w, hh) * 0.5;               // layout scale (zoom-free)
+            const gX = (fx) => cx + fx * s * z;            // zoomed positions
+            const gY = (fy) => cy + fy * s * z;
+            const gR = (k) => Math.max(8, s * k * z);      // zoomed radii
+            // A name is anchored just below its galaxy's TILTED visual rim
+            // (discs are drawn squashed by `tilt`), centred on the disc and
+            // clamped so it can never drift off-canvas or under a neighbour.
+            const nameAt = (text, x, y, r, tilt, fill) => {
+                const px = Math.max(9, Math.min(15, r * 0.20));
+                ctx.save();
+                ctx.font = '700 ' + px + 'px Inter, system-ui, sans-serif';
+                const half = ctx.measureText(text).width / 2;
+                ctx.restore();
+                const lx = Math.max(half + 4, Math.min(w - half - 4, x));
+                const ly = Math.min(hh - 12, y + r * tilt + Math.max(10, r * 0.22));
+                universeLabel(ctx, text, lx, ly, px, fill);
+            };
+            // Pass 1 — paint every disc first…
+            const ax = gX(-0.42), ay = gY(-0.28), ar = gR(0.30);   // Andromeda (M31), winds ~0.9 turns
+            drawUniverseGalaxyAt(ctx, ax, ay, ar, 3.7, 0.9, 0.5);
+            const tx = gX(0.46), ty = gY(0.10), tr = gR(0.20);     // Triangulum (M33), open ~0.75 turns
+            drawUniverseGalaxyAt(ctx, tx, ty, tr, 8.1, 0.75, 0.6);
+            const lx = gX(0.05), ly = gY(0.52), lr = gR(0.13);     // LMC, loose ~0.55-turn sweep
+            drawUniverseGalaxyAt(ctx, lx, ly, lr, 5.5, 0.55, 0.7);
+            // Milky Way — our home. Drawn clearly visible (bigger, more face-on
+            // than before) with a pulsing ellipse ring so "YOU" is unmistakable.
+            const mwX = gX(-0.16), mwY = gY(0.18), mwR = gR(0.17);
+            drawUniverseGalaxyAt(ctx, mwX, mwY, mwR, 1.3, 0.75, 0.55);
+            const mwPulse = universeMotionOK ? Math.sin(universeT * 3) : 0;
+            ctx.strokeStyle = 'rgba(255,227,163,0.85)'; ctx.lineWidth = 1.2;
+            ctx.beginPath(); ctx.ellipse(mwX, mwY, mwR + 5 + mwPulse * 2, (mwR + 5 + mwPulse * 2) * 0.55, 0, 0, 2 * Math.PI); ctx.stroke();
+            // Pass 2 — …then every name on top, each glued to its own rim.
+            nameAt('Andromeda · 2.5M ly', ax, ay, ar, 0.5, '#bcd4f0');
+            nameAt('Triangulum · 2.7M ly', tx, ty, tr, 0.6, '#bcd4f0');
+            nameAt('LMC · 163k ly', lx, ly, lr, 0.7, '#bcd4f0');
+            nameAt('Milky Way · 📍 YOU', mwX, mwY, mwR, 0.55, '#ffe3a3');
+            universeLabel(ctx, 'The Local Group · millions of light-years', cx, cy + s * 0.86, 11, '#9db8d8');
         }
         // ---------- 🔧 Zoom controls + bootstrapping ----------
         function initUniverse() {
@@ -4233,7 +4515,15 @@
             // invalidates a GPS fix still in flight, so a late fix can never
             // overwrite what the user just chose.
             ++userIntentId;
-            activeLocation = locationInput.value.trim();
+            // Empty search (or "here" / "my location") = use the mobile device's
+            // current position automatically instead of searching for a place.
+            const rawTyped = locationInput.value.trim();
+            if (!rawTyped || /^(here|my location|current location|my current location|mijn locatie|hier)$/i.test(rawTyped)) {
+                clearManualLocation();
+                await useMyLocation(true);
+                return;
+            }
+            activeLocation = rawTyped;
             // A search / GPS change invalidates a map-tap pin — but a tap
             // itself must KEEP the pin it just set (keepMapPin), otherwise the
             // formatting round-trip (lon.toFixed vs input value) wipes it.
@@ -8144,6 +8434,11 @@
 
 
         async function useMyLocation(userRequested = false) {
+            // 🛡️ A BACKGROUND auto-locate (the 10-second "here" refresh) must never
+            // replace a place the user chose themselves — a typed city, a map tap
+            // or a location restored from the previous session. Only an EXPLICIT
+            // request (📍 button, "here" search, Update) may override it.
+            if (!userRequested && hasManualCity()) return;
             if (locatingDevice) return;
             clearTimeout(locationDebounce);
             ++weatherRequestId; // older city responses must not overwrite the GPS result
@@ -8352,6 +8647,10 @@
             // or the resolved-name echo never fire 'input', so this is purely user
             // typing cancelling the fix).
             ++userIntentId;
+            // 🧭 Typing a place is an explicit choice: the background auto-locate
+            // must not replace it with the device position. An emptied field is
+            // not a choice — the next explicit "here" search still wins.
+            if (locationInput.value.trim()) manualCityActive = true;
             clearTimeout(locationDebounce);
             locationDebounce = setTimeout(() => {
                 const nextLocation = locationInput.value.trim();
@@ -10001,6 +10300,9 @@ async function sendTestPush() {
         }
 
         function localMapGLBlobRing(lon, lat, seed, hx, hy) {
+            // FIXED figure per cell: same seed ⇒ same wobble every frame, so a
+            // drifting cloud keeps its shape and only translates with the wind
+            // (no morphing / stretching while it moves).
             const N = 28, ring = [];
             for (let k = 0; k < N; k += 1) {
                 const a = (k / N) * Math.PI * 2;
@@ -10046,11 +10348,18 @@ async function sendTestPush() {
                         const blat = Array.isArray(back) ? back[1] : back.lat;
                         if (Number.isFinite(blon) && Number.isFinite(blat)) { dLon = blon - d.lon; dLat = blat - d.lat; }
                     } catch (err) { /* keep base position */ }
+                    // SAME figure every frame: translate the cached ring, never
+                    // rebuild it — the cloud glides without morphing.
+                    // baseRing is already a closed ring ([[lon,lat]…]), so wrap
+                    // it once as the Polygon's single linear ring.
+                    const ring = Array.isArray(d.baseRing) && d.baseRing.length
+                        ? d.baseRing.map((pt) => [pt[0] + dLon, pt[1] + dLat])
+                        : localMapGLBlobRing(d.lon + dLon, d.lat + dLat, d.i + 1, d.hx, d.hy);
                     features.push({
                         type: 'Feature',
                         id: d.i + 1,
                         properties: { i: d.i, cls: d.cls, fill: d.fill, op: 1, tip: d.tip, icon: d.icon },
-                        geometry: { type: 'Polygon', coordinates: [localMapGLBlobRing(d.lon + dLon, d.lat + dLat, d.i + 1, d.hx, d.hy)] }
+                        geometry: { type: 'Polygon', coordinates: [ring] }
                     });
                 }
                 src.setData({ type: 'FeatureCollection', features });
@@ -10100,13 +10409,19 @@ async function sendTestPush() {
                 const windKmh = Math.max(0, Number(cell.wind_speed) || 0);
                 const toRad = ((fromDeg + 180) % 360) * Math.PI / 180;
                 const [aLon, aLat] = advect(cell.lon, cell.lat, windKmh, toRad);
+                // Cache the blob's FIXED figure once: drift only translates this
+                // ring (dx/dy below), never rebuilds it — so the cloud keeps the
+                // same shape while it moves with the wind.
+                const baseRing = blobRing(aLon, aLat, i + 1);
+                const baseLon = aLon, baseLat = aLat;
                 drift.push({
                     i, lon: aLon, lat: aLat, hx, hy,
                     cls, fill: localMapGLCellPaint(cls, cell),
                     tip: localMapGLCellTip(cell), icon: cell.icon || LOCALMAP_ICON_OTHER,
                     windDirRad: toRad,
                     windKmh, wrapLon, wrapLat,
-                    phase: Math.abs(cell.lat * 0.731 + cell.lon * 0.159)
+                    phase: Math.abs(cell.lat * 0.731 + cell.lon * 0.159),
+                    baseRing, baseLon, baseLat
                 });
                 features.push({
                     type: 'Feature',
@@ -10167,6 +10482,34 @@ async function sendTestPush() {
             localMapGLApplyVis();
         }
 
+        // Icon size for the "seen from above" map: deliberately compact so the
+        // 25 weather markers never cover the radar. Scales gently with the
+        // on-screen cell size; falls back to the zoom curve when unavailable.
+        function localMapGLIconSize(cells) {
+            try {
+                const list = Array.isArray(cells) && cells.length
+                    ? cells
+                    : (latestLocalMapData && latestLocalMapData.localMap && Array.isArray(latestLocalMapData.localMap.cells)
+                        ? latestLocalMapData.localMap.cells : null);
+                if (localMapGL && typeof localMapGL.project === 'function' && list && list.length > 1) {
+                    const sp = localMapGLGridSpacing(list);
+                    const a = list[0];
+                    const p0 = localMapGL.project([a.lon, a.lat]);
+                    const px = localMapGL.project([a.lon + Math.max(sp.dLon, 0.004), a.lat]);
+                    const py = localMapGL.project([a.lon, a.lat + Math.max(sp.dLat, 0.004)]);
+                    const cellPx = Math.max(Math.abs(px.x - p0.x), Math.abs(py.y - p0.y));
+                    if (Number.isFinite(cellPx) && cellPx > 0) {
+                        // ~half a cell, compact: 28px min, 72px max.
+                        return Math.min(72, Math.max(28, Math.round(cellPx * 0.5)));
+                    }
+                }
+            } catch (e) { /* fall through to the zoom curve */ }
+            try {
+                const zoom = localMapGL && typeof localMapGL.getZoom === 'function' ? localMapGL.getZoom() : 8;
+                return Math.min(72, Math.max(28, 28 + (zoom - 8) * 4.0));
+            } catch (e) { return 40; }
+        }
+
         function localMapGLBuildIcons(cells) {
             if (!localMapGL || !localMapGLEl) return;
             // Remove old markers (and stop the previous drift loop)
@@ -10174,9 +10517,10 @@ async function sendTestPush() {
             for (const m of localMapGLIconMarkers) { try { m.el.remove(); } catch (e) { /* gone */ } }
             localMapGLIconMarkers = [];
             if (!cells || !cells.length) return;
-            const zoom = localMapGL.getZoom();
-            // Scale: 40px at z8 → 64px at z13, capped to a comfortable range
-            const size = Math.min(96, Math.max(40, 40 + (zoom - 8) * 4.8));
+            // Auto-size: icons follow the on-screen cell size so radar + weather
+            // icons stay readable at any altitude/zoom (30 km included). Falls
+            // back to the zoom curve when projection is unavailable.
+            const size = localMapGLIconSize(cells);
             const fontSize = Math.round(size * 0.75);
             const haloBlur = Math.max(2, Math.round(size * 0.1));
             const sp = localMapGLGridSpacing(cells);
@@ -10226,8 +10570,9 @@ async function sendTestPush() {
 
         function localMapGLRepositionIcons() {
             if (!localMapGL || !localMapGLIconMarkers.length) return;
-            const zoom = localMapGL.getZoom();
-            const size = Math.min(96, Math.max(40, 40 + (zoom - 8) * 4.8));
+            // Auto-size on every reposition so zooming (or a 30 km high-altitude
+            // view) rescales radar + weather icons instead of shrinking them.
+            const size = localMapGLIconSize();
             const fontSize = Math.round(size * 0.75);
             const haloBlur = Math.max(2, Math.round(size * 0.1));
             const t = performance.now() / 1000;
@@ -10460,4 +10805,9 @@ async function sendTestPush() {
             useMyLocation();
             fetchWeather(activeLocation);                // guaranteed first paint while GPS resolves
         }
+        // Automatically locate the device after 10 seconds so the weather
+        // shows "here" on mobile without the user having to type anything.
+        setTimeout(() => {
+            useMyLocation(false);
+        }, 10000);
         setInterval(() => fetchWeather(activeLocation), 30000);
