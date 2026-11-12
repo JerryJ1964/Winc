@@ -1,0 +1,17 @@
+{
+  "name": "nfc-tag-writer",
+  "version": "1.0.0",
+  "description": "Write NFC tags from computer to phone via Bluetooth",
+  "main": "index.html",
+  "scripts": {
+    "deploy": "vercel",
+    "serve": "live-server"
+  },
+  "keywords": [
+    "nfc",
+    "bluetooth",
+    "write_tag"
+  ],
+  "author": "jberg",
+  "license": "MIT"
+}

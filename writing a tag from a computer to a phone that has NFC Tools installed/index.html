@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Write to NFC Tag</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="wrapper">
+    <div class="card">
+      <h1>Write to NFC Tag</h1>
+      <p class="subtitle">Send NDEF data to your phone running <strong>NFC Tools</strong> over Bluetooth.</p>
+    </div>
+
+    <div class="card">
+      <h2>Tag Generation</h2>
+      <div class="form-group">
+        <label for="tagCount">Number of Tags (max 30)</label>
+        <input type="number" id="tagCount" min="1" max="30" value="1" required>
+      </div>
+      <div class="form-group">
+        <label for="startNumber">Start Number (5 digits)</label>
+        <input type="number" id="startNumber" min="0" max="99999" value="00000" required>
+        <div class="hint">Will generate sequential 5-digit numbers starting from this value</div>
+      </div>
+      <div class="form-group">
+        <label for="tagData">Tag Data (NDEF message)</label>
+        <textarea id="tagData" placeholder="Enter the message or NDEF data to write..."></textarea>
+        <div class="hint">Common NDEF record types:<br>
+          - <code>TextRecord</code>: e.g. <code>Hello NFC!</code><br>
+          - <code title="URI">urn:uuid:...</code> for URI<br>
+          - <code>AbsoluteTimeRecord</code> / <code>RelativeTimeRecord</code>
+        </div>
+      </div>
+      <div class="tag-count-row">
+        <div class="form-group">
+          <label for="outputFormat">Output Format:</label>
+          <select id="outputFormat">
+            <option value="json">JSON Label (NFC Tools format)</option>
+            <option value="text">Plain Text (UTF-8)</option>
+            <option value="uri">URI (urn:uuid)</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label for="reportInterval">Report Interval (ms)</label>
+          <input type="number" id="reportInterval" min="100" max="5000" value="500">
+        </div>
+        <div class="form-group">
+          <label>
+            <input type="checkbox" id="generateLabels" checked>
+            Auto-generate labels
+          </label>
+        </div>
+      </div>
+      <div class="uuid-selector">
+        <button id="uuid-spp" class="active" data-uuid="0000110A-0000-1000-8000-00805F9B34FB">SPP (Serial Port)</button>
+        <button id="uuid-obdex" data-uuid="0000110C-0000-1000-8000-00805F9B34FB">OBDE (Data)</button>
+        <button id="uuid-hoc" data-uuid="00001105-0000-1000-8000-00805F9B34FB">HOGP (Handsfree)</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Bluetooth Connection</h2>
+      <button id="scanBtn" class="btn">Scan for Device</button>
+      <div id="deviceList" style="margin-top: 15px; max-height: 200px; overflow-y: auto; display: none;">
+        <p class="text-muted">No devices found. Try scanning again.</p>
+      </div>
+      <div id="connectionStatus" class="status disconnected">
+        Not connected
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Write Tags</h2>
+      <button id="writeBtn" class="btn" disabled>Write Tags</button>
+      <div id="progressContainer" class="progress-container hidden">
+        <div class="progress-bar">
+          <div id="progressFill" class="progress-fill" style="width: 0%;"></div>
+        </div>
+        <span id="progressText" class="text-muted">0%</span>
+      </div>
+      <div id="status" class="status hidden"></div>
+    </div>
+
+    <div class="card">
+      <h2>Preview</h2>
+      <div id="recordPreview" class="text-muted">No tags written yet.</div>
+    </div>
+  </div>
+
+  <div class="card">
+      <h2>Write Numbers</h2>
+      <div class="form-group">
+        <label for="writeNumbers">Number to write (5 digits)</label>
+        <input type="number" id="writeNumbers" min="0" max="99999" value="00001" required>
+        <div class="hint">Enter a 5-digit number to write as tag data</div>
+      </div>
+      <div class="form-group">
+        <label for="writeCount">Count (max 30)</label>
+        <input type="number" id="writeCount" min="1" max="30" value="1" required>
+      </div>
+      <button id="writeNumbersBtn" class="btn btn-warning" disabled>Write Numbers</button>
+      <div id="numbersStatus" class="status hidden"></div>
+    </div>
+
+    <div class="card tag-list-card">
+      <h2>Tag List</h2>
+      <p class="tag-list-hint">Maximum of 30 entries. Click "write" next to an entry to write the tag; the button changes to "written."</p>
+      <ul class="tag-list" id="tag-list"></ul>
+      <p class="tag-list-stats" id="tag-list-stats">0 of 30 written</p>
+    </div>
+
+    <style>
+      .tag-list-card h2 { margin-top: 0; font-size: 1.25rem; margin-bottom: 4px; }
+      .tag-list-hint { margin: 0 0 12px 0; font-size: 0.875rem; color: #6b7280; }
+      .tag-list {
+        list-style: none;
+        padding: 0;
+        margin: 0 0 12px 0;
+        border: 1px solid #e5e7eb;
+        border-radius: 10px;
+        background: #ffffff;
+        max-height: 420px;
+        overflow-y: auto;
+      }
+      .tag-list li {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 10px 14px;
+        border-bottom: 1px solid #f3f4f6;
+        font-size: 0.95rem;
+      }
+      .tag-list li:last-child { border-bottom: none; }
+      .tag-list li:empty { display: none; }
+      .tag-entry { display: flex; align-items: center; gap: 10px; min-width: 0; }
+      .tag-number {
+        width: 22px;
+        font-size: 0.875rem;
+        color: #6b7280;
+        text-align: right;
+        flex-shrink: 0;
+      }
+      .tag-name {
+        overflow: hidden;
+        white-space: nowrap;
+        text-overflow: ellipsis;
+        color: #111827;
+        flex-shrink: 1;
+      }
+      .tag-list button.write-btn {
+        appearance: none;
+        border: none;
+        border-radius: 8px;
+        padding: 4px 12px;
+        font-size: 0.85rem;
+        font-weight: 600;
+        cursor: pointer;
+        white-space: nowrap;
+        flex-shrink: 0;
+        transition: background 0.2s, opacity 0.2s;
+      }
+      .tag-list button.write-btn:not(.written) {
+        background: #2563eb;
+        color: #ffffff;
+      }
+      .tag-list button.write-btn:not(.written):hover { background: #1d4ed8; }
+      .tag-list button.write-btn:not(.written):active { background: #1e40af; }
+      .tag-list button.write-btn.written {
+        background: #10b981;
+        color: #ffffff;
+      }
+      .tag-list button.write-btn.written:hover { background: #059669; }
+      .tag-list button.write-btn:disabled { opacity: 0.7; cursor: not-allowed; }
+      .tag-list-stats {
+        margin: 0;
+        font-size: 0.875rem;
+        color: #6b7280;
+      }
+    </style>
+
+    <script>
+      (function () {
+        const MAX_ENTRIES = 30;
+        const listEl = document.getElementById('tag-list');
+        const statsEl = document.getElementById('tag-list-stats');
+
+        function updateStats() {
+          const written = document.querySelectorAll('#tag-list .write-btn.written').length;
+          statsEl.textContent = written + ' of ' + MAX_ENTRIES + ' written';
+        }
+
+        function createEntry(index) {
+          const li = document.createElement('li');
+          li.setAttribute('data-entry', index);
+
+          const entry = document.createElement('div');
+          entry.className = 'tag-entry';
+
+          const number = document.createElement('span');
+          number.className = 'tag-number';
+          number.textContent = String(index).padStart(2, '0');
+
+          const name = document.createElement('span');
+          name.className = 'tag-name';
+          name.textContent = 'Tag ' + index;
+
+          const button = document.createElement('button');
+          button.type = 'button';
+          button.className = 'write-btn';
+          button.textContent = 'write';
+          button.addEventListener('click', function () {
+            if (button.classList.contains('written')) return;
+            button.classList.add('written');
+            button.textContent = 'written';
+            button.disabled = true;
+            updateStats();
+          });
+
+          entry.appendChild(number);
+          entry.appendChild(name);
+          li.appendChild(entry);
+          li.appendChild(button);
+          return li;
+        }
+
+        function render() {
+          listEl.innerHTML = '';
+          for (let i = 1; i <= MAX_ENTRIES; i++) {
+            listEl.appendChild(createEntry(i));
+          }
+          updateStats();
+        }
+
+        render();
+      })();
+    </script>
+
+    <script src="app.js"></script>
+</body>
+</html>
